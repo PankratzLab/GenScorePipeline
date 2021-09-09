@@ -1,0 +1,10 @@
+*.swp
+*~
+target/
+*/resources
+.project
+.settings
+.classpath
+*.DS_Store
+.Rhistory
+*/bin
