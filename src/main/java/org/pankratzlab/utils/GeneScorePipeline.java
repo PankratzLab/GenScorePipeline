@@ -36,11 +36,11 @@ import org.pankratzlab.common.HashVec;
 import org.pankratzlab.common.Logger;
 import org.pankratzlab.common.PSF;
 import org.pankratzlab.common.Resources;
-import org.pankratzlab.common.StrandOps;
-import org.pankratzlab.common.ext;
 import org.pankratzlab.common.Resources.CHROMOSOME;
+import org.pankratzlab.common.StrandOps;
 import org.pankratzlab.common.StrandOps.AlleleOrder;
 import org.pankratzlab.common.StrandOps.CONFIG;
+import org.pankratzlab.common.ext;
 import org.pankratzlab.common.bioinformatics.Sequence;
 import org.pankratzlab.common.filesys.Positions;
 import org.pankratzlab.common.parsing.DoubleFilter;
@@ -2563,9 +2563,9 @@ public class GeneScorePipeline {
           markerWriter.println(MARKER_RESULT_HEADER);
           for (String marker : markersInOrder) {
             if (mf.metaMarkers.containsKey(marker)) { // may have been dropped by meta HitWindows
-              RegressionResult rrResult = actualRegression(study.markerScores.get(constr, mf)
-                                                                             .columnMap()
-                                                                             .get(marker),
+              RegressionResult rrResult = actualRegression(study.markerDosages.get(constr, mf)
+                                                                              .columnMap()
+                                                                              .get(marker),
                                                            null, pd);
               double metaBeta = mf.metaMarkers.get(marker).beta;
               double metaSE = mf.metaMarkers.get(marker).se;
