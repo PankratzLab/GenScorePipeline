@@ -188,13 +188,17 @@ public class GeneScorePipeline {
   static class MetaMarker {
     final String name;
     final double beta, se, pval, freq;
+    final String a1, a2;
 
-    public MetaMarker(String name, double beta, double se, double pval, double freq) {
+    public MetaMarker(String name, double beta, double se, double pval, double freq, String a1,
+                      String a2) {
       this.name = name;
       this.beta = beta;
       this.se = se;
       this.freq = freq;
       this.pval = pval;
+      this.a1 = a1;
+      this.a2 = a2;
     }
   }
 
@@ -1408,7 +1412,8 @@ public class GeneScorePipeline {
 
   private void loadMetaFileData() {
     String[][] factors = new String[][] {Aliases.MARKER_NAMES, Aliases.EFFECTS,
-                                         Aliases.ALLELE_FREQS, Aliases.PVALUES, Aliases.STD_ERRS};
+                                         Aliases.ALLELE_FREQS, Aliases.PVALUES, Aliases.STD_ERRS,
+                                         Aliases.ALLELES[0], Aliases.ALLELES[1]};
     for (MetaFile mf : metaFiles) {
       String metaFile = mf.metaFile;
       String fullPath = metaDir + metaFile;
@@ -1429,7 +1434,9 @@ public class GeneScorePipeline {
           double freq = Double.parseDouble(temp[indices[2]]);
           double pval = Double.parseDouble(temp[indices[3]]);
           double se = indices[4] == -1 ? Double.NaN : Double.parseDouble(temp[indices[4]]);
-          mf.metaMarkers.put(mkr, new MetaMarker(mkr, beta, se, pval, freq));
+          String a1 = indices[5] == -1 ? "." : temp[indices[5]];
+          String a2 = indices[6] == -1 ? "." : temp[indices[6]];
+          mf.metaMarkers.put(mkr, new MetaMarker(mkr, beta, se, pval, freq, a1, a2));
         }
       } catch (IOException e) {
         // TODO Auto-generated catch block
@@ -2106,6 +2113,8 @@ public class GeneScorePipeline {
   private static final String MARKER_REGRESSION_PREFIX = "marker_results_";
   private static final String MARKER_REGRESSION_EXTEN = FILE_EXT_OUT;
   private static final String MENDELIAN_RANDOMIZATION_PREFIX = "MendelianRandomization_";
+  private static final String TWO_SAMPLE_PREFIX = "TwoSampleMR_";
+  private static final String TWO_SAMPLE_HDR = "SNP\teffect_allele\tother_allele\teaf\tbeta\tse\tP-value\tPhenotype";
   private static final String MENDELIAN_RANDOMIZATION_EXTEN = ".csv";
   private static final String REGRESSION_BETA_FILE = "markers_beta.out";
 
@@ -2558,28 +2567,64 @@ public class GeneScorePipeline {
           String pheno = study.phenoFiles.get(i);
           PhenoData pd = study.phenoData.get(pheno);
 
+          String mrPrefDirMRStr = getDirPath(study, dataFile, analysisKey) + "mr/mr/" + pheno + "/";
+          File mrPrefDirMR = new File(mrPrefDirMRStr);
+          mrPrefDirMR.mkdirs();
+          String mrPrefDirTSStr = getDirPath(study, dataFile, analysisKey) + "mr/two-sample/"
+                                  + pheno + "/";
+          File mrPrefDirTS = new File(mrPrefDirTSStr);
+          mrPrefDirTS.mkdirs();
+
+          PrintWriter twoSampleExposure = Files.getAppropriateWriter(mrPrefDirTSStr + "exposure_"
+                                                                     + pheno + ".txt");
+          PrintWriter twoSampleOutcome = Files.getAppropriateWriter(mrPrefDirTSStr + "outcome_"
+                                                                    + pheno + ".txt");
+          twoSampleExposure.println(TWO_SAMPLE_HDR);
+          twoSampleOutcome.println(TWO_SAMPLE_HDR);
+
+          // exposure is info from meta file
+          // outcome is from gsp
+
+          // TODO write two-sample input files (exposure/outcome)
+
           String mrrInputFile = MARKER_REGRESSION_PREFIX + pheno + MARKER_REGRESSION_EXTEN;
-          PrintWriter markerWriter = Files.getAppropriateWriter(prefDir + "/" + mrrInputFile);
+          PrintWriter markerWriter = Files.getAppropriateWriter(mrPrefDirMRStr + mrrInputFile);
           markerWriter.println(MARKER_RESULT_HEADER);
+
           for (String marker : markersInOrder) {
             if (mf.metaMarkers.containsKey(marker)) { // may have been dropped by meta HitWindows
               RegressionResult rrResult = actualRegression(study.markerDosages.get(constr, mf)
                                                                               .columnMap()
                                                                               .get(marker),
                                                            null, pd);
-              double metaBeta = mf.metaMarkers.get(marker).beta;
-              double metaSE = mf.metaMarkers.get(marker).se;
+              MetaMarker metaMarker = mf.metaMarkers.get(marker);
+              double metaBeta = metaMarker.beta;
+              double metaSE = metaMarker.se;
 
               double markerBeta = rrResult.getBeta();
               double markerSE = rrResult.se;
               markerWriter.println(resultPrefix + "\t" + pheno + "\t" + marker + "\t" + metaBeta
                                    + "\t" + metaSE + "\t" + markerBeta + "\t" + markerSE);
+
+              twoSampleExposure.println(marker + "\t" + metaMarker.a1 + "\t" + metaMarker.a2 + "\t"
+                                        + metaMarker.freq + "\t" + metaBeta + "\t" + metaSE + "\t"
+                                        + metaMarker.pval + "\tExposure");
+
+              String FREQ = ".";
+              twoSampleOutcome.println(marker + "\t" + metaMarker.a1 + "\t" + metaMarker.a2 + "\t"
+                                       + FREQ + "\t" + markerBeta + "\t" + markerSE + "\t"
+                                       + rrResult.getPval() + "\tOutcome");
+
             }
           }
+          twoSampleExposure.close();
+          twoSampleOutcome.close();
           markerWriter.close();
           if (markersInOrder.size() > 1) {
-            String mrrScript = writeMRRScript(prefDir, pheno);
+            String mrrScript = writeMRRScript(mrPrefDirMR, pheno);
             mrrScripts.add(mrrScript);
+            String tsRScript = writeTwoSampleRScript(mrPrefDirTS, pheno);
+            mrrScripts.add(tsRScript);
           }
         }
 
@@ -2629,6 +2674,44 @@ public class GeneScorePipeline {
       }
     }
     return mrrScripts;
+  }
+
+  private String writeTwoSampleRScript(File prefDir, String pheno) {
+    List<String> commands = new ArrayList<>();
+    commands.add("setwd(\"" + ext.verifyDirFormat(prefDir.getAbsolutePath()) + "\")");
+    commands.add("if (!require(TwoSampleMR)) {");
+    commands.add("  install.packages(\"TwoSampleMR\")");
+    commands.add("}");
+    commands.add("library(TwoSampleMR)");
+
+    commands.add("exp <- read_exposure_data(filename=\"exposure_" + pheno + ".txt\", sep='\t')");
+    commands.add("out <- read_outcome_data(filename=\"outcome_" + pheno + ".out\", sep='\t')");
+    commands.add("dat <-harmonise_data(exp, out, action = 2)");
+    commands.add("mr_report(dat)");
+
+    commands.add("res_single <- mr_singlesnp(dat, all_method = c(\"mr_ivw\", \"mr_egger_regression\", \"mr_weighted_median\"))");
+    commands.add("write.table(res_single, \"MRsingleSNP_" + pheno
+                 + ".txt\", sep=\"\t\", col.names=T, row.names=F, quote=F)");
+
+    commands.add("loo <- mr_leaveoneout(dat)");
+    commands.add("write.table(loo, \"MR_loo_" + pheno
+                 + ".txt\", sep=\"\t\", col.names=T, row.names=F, quote=F)");
+
+    commands.add("egger.radial<-RadialMR::egger_radial(dat)");
+    commands.add("egger.outliers<- egger.radial$outliers");
+    commands.add("write.table(egger.outliers, \"MR_egger_outlier_" + pheno
+                 + ".txt\", sep=\"\t\", col.names=T, row.names=F, quote=F)");
+
+    commands.add("ivw.radial<-RadialMR::ivw_radial(dat)");
+    commands.add("ivw.outliers<- ivw.radial$outliers");
+    commands.add("write.table(ivw.outliers, \"MR_ivw_outlier_" + pheno
+                 + ".txt\", sep=\"\t\", col.names=T, row.names=F, quote=F)");
+
+    commands.add("RadialMR::plot_radial(c(ivw.radial, egger.radial),T,F,F)");
+
+    Files.writeIterable(commands, ext.verifyDirFormat(prefDir.getAbsolutePath()) + TWO_SAMPLE_PREFIX
+                                  + pheno + ".R");
+    return "";
   }
 
   private String writeMRRScript(File prefDir, String pheno) {
