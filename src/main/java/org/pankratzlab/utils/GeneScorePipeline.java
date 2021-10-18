@@ -2706,7 +2706,7 @@ public class GeneScorePipeline {
                  + ".txt\", sep=\"\\t\", col.names=T, row.names=F, quote=F)");
 
     commands.add("RadialMR::plot_radial(c(ivw.radial, egger.radial),T,F,F)");
-    commands.add("png(filename='RadialMR.png'");
+    commands.add("png(filename='RadialMR.png')");
     commands.add("print(RadialMR)");
     commands.add("dev.off()");
 
