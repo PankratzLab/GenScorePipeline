@@ -2678,7 +2678,7 @@ public class GeneScorePipeline {
     List<String> commands = new ArrayList<>();
     commands.add("setwd(\"" + ext.verifyDirFormat(prefDir.getAbsolutePath()) + "\")");
     commands.add("if (!require(TwoSampleMR)) {");
-    commands.add("  install.packages(\"TwoSampleMR\")");
+    commands.add("  devtools::install_github(\"MRCIEU/TwoSampleMR\")}");
     commands.add("}");
     commands.add("library(TwoSampleMR)");
 
