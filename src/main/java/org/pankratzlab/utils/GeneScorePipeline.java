@@ -2712,7 +2712,23 @@ public class GeneScorePipeline {
 
     Files.writeIterable(commands, ext.verifyDirFormat(prefDir.getAbsolutePath()) + TWO_SAMPLE_PREFIX
                                   + pheno + ".R");
-    return "";
+
+    commands = new ArrayList<>();
+    commands.add("cd " + prefDir.getAbsolutePath());
+    if (rLibsDir != null) {
+      commands.add("export R_LIBS=" + rLibsDir);
+      commands.add("export R_LIBS_SITE=" + rLibsDir);
+    } else {
+      log.report("No R library directory specified, MendelianRandomization library will be installed if not present in default R library directory.");
+    }
+    commands.add("Rscript " + ext.verifyDirFormat(prefDir.getAbsolutePath()) + TWO_SAMPLE_PREFIX
+                 + pheno + ".R");
+
+    String runScript = ext.verifyDirFormat(prefDir.getAbsolutePath()) + TWO_SAMPLE_PREFIX + pheno
+                       + ".sh";
+    Files.writeIterable(commands, runScript);
+    Files.chmod(runScript);
+    return runScript;
   }
 
   private String writeMRRScript(File prefDir, String pheno) {
