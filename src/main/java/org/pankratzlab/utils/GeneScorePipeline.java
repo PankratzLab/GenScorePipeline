@@ -2576,16 +2576,14 @@ public class GeneScorePipeline {
           mrPrefDirTS.mkdirs();
 
           PrintWriter twoSampleExposure = Files.getAppropriateWriter(mrPrefDirTSStr + "exposure_"
-                                                                     + pheno + ".txt");
+                                                                     + pheno + ".out");
           PrintWriter twoSampleOutcome = Files.getAppropriateWriter(mrPrefDirTSStr + "outcome_"
-                                                                    + pheno + ".txt");
+                                                                    + pheno + ".out");
           twoSampleExposure.println(TWO_SAMPLE_HDR);
           twoSampleOutcome.println(TWO_SAMPLE_HDR);
 
           // exposure is info from meta file
           // outcome is from gsp
-
-          // TODO write two-sample input files (exposure/outcome)
 
           String mrrInputFile = MARKER_REGRESSION_PREFIX + pheno + MARKER_REGRESSION_EXTEN;
           PrintWriter markerWriter = Files.getAppropriateWriter(mrPrefDirMRStr + mrrInputFile);
@@ -2684,30 +2682,33 @@ public class GeneScorePipeline {
     commands.add("}");
     commands.add("library(TwoSampleMR)");
 
-    commands.add("exp <- read_exposure_data(filename=\"exposure_" + pheno + ".txt\", sep='\t')");
-    commands.add("out <- read_outcome_data(filename=\"outcome_" + pheno + ".out\", sep='\t')");
-    commands.add("dat <-harmonise_data(exp, out, action = 2)");
+    commands.add("exp <- read_exposure_data(filename=\"exposure_" + pheno + ".out\", sep='\\t')");
+    commands.add("out <- read_outcome_data(filename=\"outcome_" + pheno + ".out\", sep='\\t')");
+    commands.add("dat <-harmonise_data(exp, out, action = 1)");
     commands.add("mr_report(dat)");
 
     commands.add("res_single <- mr_singlesnp(dat, all_method = c(\"mr_ivw\", \"mr_egger_regression\", \"mr_weighted_median\"))");
     commands.add("write.table(res_single, \"MRsingleSNP_" + pheno
-                 + ".txt\", sep=\"\t\", col.names=T, row.names=F, quote=F)");
+                 + ".txt\", sep=\"\\t\", col.names=T, row.names=F, quote=F)");
 
     commands.add("loo <- mr_leaveoneout(dat)");
     commands.add("write.table(loo, \"MR_loo_" + pheno
-                 + ".txt\", sep=\"\t\", col.names=T, row.names=F, quote=F)");
+                 + ".txt\", sep=\"\\t\", col.names=T, row.names=F, quote=F)");
 
     commands.add("egger.radial<-RadialMR::egger_radial(dat)");
     commands.add("egger.outliers<- egger.radial$outliers");
     commands.add("write.table(egger.outliers, \"MR_egger_outlier_" + pheno
-                 + ".txt\", sep=\"\t\", col.names=T, row.names=F, quote=F)");
+                 + ".txt\", sep=\"\\t\", col.names=T, row.names=F, quote=F)");
 
     commands.add("ivw.radial<-RadialMR::ivw_radial(dat)");
     commands.add("ivw.outliers<- ivw.radial$outliers");
     commands.add("write.table(ivw.outliers, \"MR_ivw_outlier_" + pheno
-                 + ".txt\", sep=\"\t\", col.names=T, row.names=F, quote=F)");
+                 + ".txt\", sep=\"\\t\", col.names=T, row.names=F, quote=F)");
 
     commands.add("RadialMR::plot_radial(c(ivw.radial, egger.radial),T,F,F)");
+    commands.add("png(filename='RadialMR.png'");
+    commands.add("print(RadialMR)");
+    commands.add("dev.off()");
 
     Files.writeIterable(commands, ext.verifyDirFormat(prefDir.getAbsolutePath()) + TWO_SAMPLE_PREFIX
                                   + pheno + ".R");
