@@ -1531,13 +1531,13 @@ public class GeneScorePipeline {
 
         if (!hitMkrLocations.isEmpty()) {
           // read betas and freqs for hitwindow markers
-          HashMap<String, double[]> dataMarkers = new HashMap<>();
+          HashMap<String, MetaMarker> dataMarkers = new HashMap<>();
           Set<String> mkrs = new HashSet<>(hitMkrLocations.keySet());
           for (String hitMkr : mkrs) {
             if (mf.metaMarkers.containsKey(hitMkr)) {
               MetaMarker mm = mf.metaMarkers.get(hitMkr);
               if (!Double.isNaN(mm.beta) && !Double.isNaN(mm.freq) && !Double.isNaN(mm.pval)) {
-                dataMarkers.put(hitMkr, new double[] {mm.beta, mm.freq, mm.pval, mm.se});
+                dataMarkers.put(hitMkr, mm);
               } else {
                 hitMkrLocations.remove(hitMkr);
               }
@@ -1553,7 +1553,7 @@ public class GeneScorePipeline {
           for (Study study : studies) {
             study.loadDataSources(mf, constr, hitMkrLocations);
 
-            HashMap<String, double[]> bimSubsetMarkers = new HashMap<>();
+            HashMap<String, MetaMarker> bimSubsetMarkers = new HashMap<>();
             Set<String> markerNames = new HashSet<>();
             markerNames.addAll(hitMkrLocations.keySet());
             markerNames.addAll(study.data.values().stream().map(d -> d.getMarkerSet())
@@ -1583,13 +1583,6 @@ public class GeneScorePipeline {
         }
       }
     }
-  }
-
-  static class MetaFileData {
-    double score1;
-    double score2;
-    double beta;
-    double se;
   }
 
   private void createAffectedPhenoFiles(Study study) {
@@ -1734,21 +1727,21 @@ public class GeneScorePipeline {
     }
   }
 
-  private double getBetaFreqScore(HashMap<String, double[]> markerMap) {
+  private double getBetaFreqScore(HashMap<String, MetaMarker> markerMap) {
     double sum = 0.0;
     // (Beta^2 * 2 * MAF (1-MAF))
-    for (java.util.Map.Entry<String, double[]> entry : markerMap.entrySet()) {
-      double score = 2 * (entry.getValue()[0] * entry.getValue()[0]) * entry.getValue()[1]
-                     * (1 - entry.getValue()[1]);
+    for (java.util.Map.Entry<String, MetaMarker> entry : markerMap.entrySet()) {
+      MetaMarker mm = entry.getValue();
+      double score = 2 * (mm.beta * mm.beta) * mm.freq * (1 - mm.freq);
       sum += score;
     }
     return sum;
   }
 
-  private double getChiDistRevScore(HashMap<String, double[]> markerMap) {
+  private double getChiDistRevScore(HashMap<String, MetaMarker> markerMap) {
     double sum = 0.0;
-    for (java.util.Map.Entry<String, double[]> entry : markerMap.entrySet()) {
-      sum += ProbDist.ChiDistReverse(entry.getValue()[2], 1);
+    for (java.util.Map.Entry<String, MetaMarker> entry : markerMap.entrySet()) {
+      sum += ProbDist.ChiDistReverse(entry.getValue().pval, 1);
     }
     return sum;
   }
