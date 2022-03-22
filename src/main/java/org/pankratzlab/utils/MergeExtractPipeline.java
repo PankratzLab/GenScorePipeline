@@ -808,7 +808,7 @@ public class MergeExtractPipeline {
         if ("".equals(line)) {
           continue;
         }
-        temp = line.split(ext.determineDelimiter(line));
+        temp = line.split(PSF.Regex.GREEDY_WHITESPACE);
         if (temp.length == 4) {
           log.report("Added data source: " + temp[1]);
           sources.add(new DataSource(temp[0], null, temp[1], temp[2], temp[3]));
