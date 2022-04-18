@@ -32,15 +32,18 @@ public class MergeExtractPipeline {
 
     public String label;
     public String dataFile;
+    public String dataIndexFile;
     public String mapFile;
     public String idFile;
-    public boolean relD, relM, relI;
+    public boolean relD, relDI, relM, relI;
 
-    public DataSource(String label, String dir, String d, String m, String i) {
+    public DataSource(String label, String dir, String d, String dI, String m, String i) {
       relD = Files.isRelativePath(d);
+      relDI = dI != null && Files.isRelativePath(dI);
       relM = m != null && Files.isRelativePath(m);
       relI = i != null && Files.isRelativePath(i);
       dataFile = (relD ? dir : "") + d;
+      dataIndexFile = (null == dI || ext.isMissingValue(dI)) ? null : ((relDI ? dir : "") + dI);
       mapFile = (null == m || ext.isMissingValue(m)) ? null : ((relM ? dir : "") + m);
       idFile = (null == i || ext.isMissingValue(i)) ? null : ((relI ? dir : "") + i);
       this.label = label;
@@ -294,9 +297,9 @@ public class MergeExtractPipeline {
     return this;
   }
 
-  public MergeExtractPipeline addDataSource(String lbl, String dir, String dataFile, String mapFile,
-                                            String idFile) {
-    dataSources.add(new DataSource(lbl, dir, dataFile, mapFile, idFile));
+  public MergeExtractPipeline addDataSource(String lbl, String dir, String dataFile,
+                                            String dataIndexFile, String mapFile, String idFile) {
+    dataSources.add(new DataSource(lbl, dir, dataFile, dataIndexFile, mapFile, idFile));
     return this;
   }
 
@@ -483,7 +486,7 @@ public class MergeExtractPipeline {
         log.reportError("PLINK merge command failed.  Please check output for errors and try again.");
         return;
       }
-      dataSources.add(new DataSource(null, dir, PSF.Plink.getBED(outRoot),
+      dataSources.add(new DataSource(null, dir, PSF.Plink.getBED(outRoot), null,
                                      PSF.Plink.getBIM(outRoot), PSF.Plink.getFAM(outRoot))); // no
       // prepend
       // here,
@@ -518,9 +521,15 @@ public class MergeExtractPipeline {
     log.report("Merging data...");
     log.report("Starting from data file: " + dataSources.get(0).dataFile);
 
-    DosageData dd1 = new DosageData(dataSources.get(0).dataFile, dataSources.get(0).idFile,
-                                    dataSources.get(0).mapFile, regions, markers, markerLocationMap,
-                                    renameMarkers ? dataSources.get(0).label : "", verbose, log);
+    DosageData dd1 = new DosageData.DosageDataBuilder().dosageFile(dataSources.get(0).dataFile)
+                                                       .dataIndexFile(dataSources.get(0).dataIndexFile)
+                                                       .idFile(dataSources.get(0).idFile)
+                                                       .mapFile(dataSources.get(0).mapFile)
+                                                       .regions(regions).markers(markers)
+                                                       .markerLocationMap(markerLocationMap)
+                                                       .markerNamePrepend(renameMarkers ? dataSources.get(0).label
+                                                                                        : "")
+                                                       .logger(log).build();
     Table<String, String, HashMap<String, Annotation>> annotations = null;
     if (dataSources.get(0).mapFile != null && !ext.isMissingValue(dataSources.get(0).mapFile)) {
       annotations = getAnnotations(dd1,
@@ -531,10 +540,15 @@ public class MergeExtractPipeline {
     for (int i = 1; i < dataSources.size(); i++) {
       System.gc();
       log.report("... merging with data file: " + dataSources.get(i).dataFile);
-      DosageData dd2 = new DosageData(dataSources.get(i).dataFile, dataSources.get(i).idFile,
-                                      dataSources.get(i).mapFile, regions, markers,
-                                      markerLocationMap,
-                                      renameMarkers ? dataSources.get(i).label : "", verbose, log);
+      DosageData dd2 = new DosageData.DosageDataBuilder().dosageFile(dataSources.get(i).dataFile)
+                                                         .dataIndexFile(dataSources.get(i).dataIndexFile)
+                                                         .idFile(dataSources.get(i).idFile)
+                                                         .mapFile(dataSources.get(i).mapFile)
+                                                         .regions(regions).markers(markers)
+                                                         .markerLocationMap(markerLocationMap)
+                                                         .markerNamePrepend(renameMarkers ? dataSources.get(i).label
+                                                                                          : "")
+                                                         .logger(log).build();
       if (!dd2.isEmpty()) {
         if (annotations != null && !ext.isMissingValue(dataSources.get(i).mapFile)) {
           String[] dd2Annots = getAnnotationLabels(dataSources.get(i).dataFile,
@@ -785,7 +799,6 @@ public class MergeExtractPipeline {
   public static ArrayList<DataSource> parseDataFile(String runDir, int[][] markerLocations,
                                                     int[][] regions, String data, int bpWindow,
                                                     Logger log) {
-    BufferedReader reader;
     String line, file;
     String[] temp;
 
@@ -802,22 +815,53 @@ public class MergeExtractPipeline {
     }
 
     ArrayList<DataSource> sources = new ArrayList<>();
-    try {
-      reader = Files.getAppropriateReader(file);
+
+    try (BufferedReader reader = Files.getAppropriateReader(file)) {
       while ((line = reader.readLine()) != null) {
         if ("".equals(line)) {
           continue;
         }
         temp = line.split(PSF.Regex.GREEDY_WHITESPACE);
-        if (temp.length == 4) {
-          log.report("Added data source: " + temp[1]);
-          sources.add(new DataSource(temp[0], null, temp[1], temp[2], temp[3]));
-        } else if (temp.length == 5) {
-          String lbl = temp[0];
-          String dir = temp[1];
-          String dataFileExt = temp[2];
-          String mapFileExt = temp[3];
-          String idFile = temp[4];
+        if (temp.length < 5 || temp.length > 8) {
+          // TODO error, line too short or too long
+        } else if ("f".equalsIgnoreCase(temp[0])) {
+          log.report("Added data source: " + temp[2]);
+          if (temp.length == 5) {
+            sources.add(new DataSource(temp[1], null, temp[2], null, temp[3], temp[4]));
+          } else if (temp.length == 6) {
+            sources.add(new DataSource(temp[1], null, temp[2], temp[3], temp[4], temp[5]));
+          } else {
+            throw new IllegalArgumentException("Invalid FILE line in data file: " + line);
+          }
+        } else if ("d".equalsIgnoreCase(temp[0])) {
+          String lbl = temp[1];
+          String dir = temp[2];
+          String dataFileExt = temp[3];
+          String dataIndexFileDir = null;
+          String dataIndexFileExt = null;
+          String mapFileExt = null;
+          String idFile = null;
+          if (temp.length == 6) {
+            // no data index dir/ext given
+            dataIndexFileDir = null;
+            dataIndexFileExt = null;
+            mapFileExt = temp[4];
+            idFile = temp[5];
+          } else if (temp.length == 7) {
+            // only data index ext given, use data dir for index dir
+            dataIndexFileDir = dir;
+            dataIndexFileExt = (ext.isMissingValue(temp[4]) ? null : temp[4]);
+            mapFileExt = temp[5];
+            idFile = temp[6];
+          } else if (temp.length == 8) {
+            // both data index dir & ext given
+            dataIndexFileDir = (ext.isMissingValue(temp[4]) ? null : temp[4]);
+            dataIndexFileExt = (ext.isMissingValue(temp[5]) ? null : temp[5]);
+            mapFileExt = temp[6];
+            idFile = temp[7];
+          } else {
+            throw new IllegalArgumentException("Invalid DIR line in data file: " + line);
+          }
           if (!Files.exists(dir)) {
             log.reportError("skipping invalid entry in data file: data directory {" + dir
                             + "} from data file {" + file + "} could not be found");
@@ -830,7 +874,21 @@ public class MergeExtractPipeline {
           String[] filesToAdd = (new File(dir)).list(ff);
           log.report("Found " + filesToAdd.length + " files to add from " + dir);
           for (String fileToAdd : filesToAdd) {
-            sources.add(new DataSource(lbl, dir, fileToAdd,
+            String dataIndexFile = null;
+            if (dataIndexFileDir != null) {
+              if (Files.exists(dataIndexFileDir + ext.rootOf(fileToAdd, true) + dataIndexFileExt)) {
+                dataIndexFile = dataIndexFileDir + ext.rootOf(fileToAdd, true) + dataIndexFileExt;
+              } else if (Files.exists(dataIndexFileDir + ext.removeDirectoryInfo(fileToAdd)
+                                      + dataIndexFileExt)) {
+                dataIndexFile = dataIndexFileDir + ext.removeDirectoryInfo(fileToAdd)
+                                + dataIndexFileExt;
+              } else {
+                throw new IllegalStateException("Couldn't find data index file for " + fileToAdd
+                                                + "; looking for " + dataIndexFileExt + " in "
+                                                + dataIndexFileDir);
+              }
+            }
+            sources.add(new DataSource(lbl, dir, fileToAdd, dataIndexFile,
                                        ext.isMissingValue(mapFileExt) ? null
                                                                       : fileToAdd.substring(0,
                                                                                             fileToAdd.length()
@@ -840,10 +898,9 @@ public class MergeExtractPipeline {
             log.report("Added data source: " + fileToAdd);
           }
         } else {
-          log.reportError("skipping invalid entry in data file: " + line);
+          throw new IllegalArgumentException("Data file lines must start with F/D to indicate File/Directory");
         }
       }
-      reader.close();
     } catch (IOException e) {
       e.printStackTrace();
       throw new IllegalArgumentException(e);
@@ -888,10 +945,14 @@ public class MergeExtractPipeline {
                    + "   (1) Run directory (output files and temporary files will be created here) (i.e. runDir="
                    + rundir + " (default))\n" + "   (2) File listing data sources (i.e. data="
                    + data + " (default))\n" + "          Example:\n"
-                   + "          dataLabel1\tfullPathDataFile1\tFullPathMapFile1\tFullPathIdFile1\n"
-                   + "          dataLabel2\tfullPathDataFile2\tFullPathMapFile2\tFullPathIdFile2\n"
-                   + "          dataLabel3\tdir1\tdataFileExt1\tmapFileExt1\tidFile3\n"
-                   + "          dataLabel4\tdir2\tdataFileExt2\tmapFileExt2\tidFile4\n"
+                   + "          F\tdataLabel1\tfullPathDataFile1\tFullPathMapFile1\tFullPathIdFile1\n"
+                   + "          F\tdataLabel2\tfullPathDataFile2\tFullPathMapFile2\tFullPathIdFile2\n"
+                   + "          F\tdataLabel3\tfullPathDataFile3\tfullPathDataIndexFile3\tfullPathMapFile3\tfullPathIdFile3\n"
+                   + "          F\tdataLabel4\tfullPathDataFile4\tfullPathDataIndexFile4\tfullPathMapFile4\tfullPathIdFile4\n"
+                   + "          D\tdataLabel3\tdir1\tdataFileExt1\tmapFileExt1\tfullOrRelativePathToIdFile5\n"
+                   + "          D\tdataLabel4\tdir2\tdataFileExt2\tmapFileExt2\tfullOrRelativePathToIdFile6\n"
+                   + "          D\tdataLabel3\tdir3\tdataFileExt3\tindexFileExt1\tmapFileExt3\tfullOrRelativePathToIdFile7\n"
+                   + "          D\tdataLabel4\tdir4\tdataFileExt4\tindexFileDir2\tindexFileExt2\tmapFileExt4\tfullOrRelativePathToIdFile8\n"
                    + "   (3a) Regions-to-extract filename (i.e. regions=" + regions
                    + " (default))\n" + "   (3b) Markers-to-extract filename (i.e. markers="
                    + markers + " (default))\n"

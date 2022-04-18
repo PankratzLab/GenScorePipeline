@@ -437,15 +437,23 @@ public class GeneScorePipeline {
                                  + "_dosage.ser";
         if (!Files.exists(serOutput)) {
           log.report("Loading data file " + dataSources.get(0).dataFile);
-          DosageData d0 = new DosageData(dataSources.get(0).dataFile, dataSources.get(0).idFile,
-                                         dataSources.get(0).mapFile, null, mkrsArray,
-                                         markerLocationMap, null, true, log);
+          DosageData d0 = new DosageData.DosageDataBuilder().dataIndexFile(dataSources.get(0).dataFile)
+                                                            .dataIndexFile(dataSources.get(0).dataIndexFile)
+                                                            .mapFile(dataSources.get(0).mapFile)
+                                                            .idFile(dataSources.get(0).idFile)
+                                                            .markers(mkrsArray)
+                                                            .markerLocationMap(markerLocationMap)
+                                                            .logger(log).verbose().build();
           if (dataSources.size() > 1) {
             for (int i = 1; i < dataSources.size(); i++) {
               log.report("Loading data file " + dataSources.get(i).dataFile);
-              DosageData d1 = new DosageData(dataSources.get(i).dataFile, dataSources.get(i).idFile,
-                                             dataSources.get(i).mapFile, null, mkrsArray,
-                                             markerLocationMap, null, true, log);
+              DosageData d1 = new DosageData.DosageDataBuilder().dataIndexFile(dataSources.get(i).dataFile)
+                                                                .dataIndexFile(dataSources.get(i).dataIndexFile)
+                                                                .mapFile(dataSources.get(i).mapFile)
+                                                                .idFile(dataSources.get(i).idFile)
+                                                                .markers(mkrsArray)
+                                                                .markerLocationMap(markerLocationMap)
+                                                                .logger(log).verbose().build();
               d0 = DosageData.combine(d0, d1, DosageData.COMBINE_OP.EITHER_IF_OTHER_MISSING, false,
                                       0, log);
               System.gc();
