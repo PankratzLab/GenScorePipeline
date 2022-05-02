@@ -437,7 +437,7 @@ public class GeneScorePipeline {
                                  + "_dosage.ser";
         if (!Files.exists(serOutput)) {
           log.report("Loading data file " + dataSources.get(0).dataFile);
-          DosageData d0 = new DosageData.DosageDataBuilder().dataIndexFile(dataSources.get(0).dataFile)
+          DosageData d0 = new DosageData.DosageDataBuilder().dosageFile(dataSources.get(0).dataFile)
                                                             .dataIndexFile(dataSources.get(0).dataIndexFile)
                                                             .mapFile(dataSources.get(0).mapFile)
                                                             .idFile(dataSources.get(0).idFile)
@@ -447,7 +447,7 @@ public class GeneScorePipeline {
           if (dataSources.size() > 1) {
             for (int i = 1; i < dataSources.size(); i++) {
               log.report("Loading data file " + dataSources.get(i).dataFile);
-              DosageData d1 = new DosageData.DosageDataBuilder().dataIndexFile(dataSources.get(i).dataFile)
+              DosageData d1 = new DosageData.DosageDataBuilder().dosageFile(dataSources.get(i).dataFile)
                                                                 .dataIndexFile(dataSources.get(i).dataIndexFile)
                                                                 .mapFile(dataSources.get(i).mapFile)
                                                                 .idFile(dataSources.get(i).idFile)
