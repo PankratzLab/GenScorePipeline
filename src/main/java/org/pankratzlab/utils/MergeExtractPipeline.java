@@ -247,14 +247,14 @@ public class MergeExtractPipeline {
     if (dataFile == null && mapFile == null) {
       if (markersFile != null && !"".equals(markersFile) && Files.exists(markersFile)) {
         outFileD = ext.rootOf(markersFile, false) + ".db.xln.gz";
-        outFileM = ext.rootOf(markersFile, false) + ".snp";
+        outFileM = ext.rootOf(markersFile, false) + ".snp.out";
       } else if (regionsFile != null && !"".equals(regionsFile) && Files.exists(regionsFile)) {
         outFileD = ext.rootOf(regionsFile, false) + ".db.xln.gz";
-        outFileM = ext.rootOf(regionsFile, false) + ".snp";
+        outFileM = ext.rootOf(regionsFile, false) + ".snp.out";
       } else {
         outFileD = (this.runDir == null ? "./" : this.runDir)
                    + Files.getNextAvailableFilename("mergeExtract.db.xln.gz");
-        outFileM = ext.rootOf(outFileD, false) + ".snp";
+        outFileM = ext.rootOf(outFileD, false) + ".snp.out";
       }
     } else {
       if (dataFile == null && mapFile != null && !"".equals(mapFile)) {
@@ -262,7 +262,7 @@ public class MergeExtractPipeline {
         outFileM = mapFile;
       } else if (mapFile == null && dataFile != null && !"".equals(dataFile)) {
         outFileD = dataFile;
-        outFileM = ext.rootOf(dataFile, false) + ".snps";
+        outFileM = ext.rootOf(dataFile, false) + ".snp.out";
       } else {
         outFileD = dataFile;
         outFileM = mapFile;
