@@ -1430,10 +1430,16 @@ public class GeneScorePipeline {
         String line = reader.readLine();
         String[] temp = line.split(PSF.Regex.GREEDY_WHITESPACE, -1);
         int[] indices = ext.indexFactors(factors, temp, false, false, true, true, new Logger());
+        int index = 1;
         while ((line = reader.readLine()) != null) {
+          index++;
           if (line.isEmpty()) continue;
           temp = line.split(PSF.Regex.GREEDY_WHITESPACE);
-          if (indices[1] != -1 && ext.isMissingValue(temp[indices[1]])
+          if (temp.length <= indices[1] || temp.length <= indices[2] || temp.length <= indices[3]) {
+            throw new IllegalStateException("too few columns on line " + index + " of meta file "
+                                            + metaFile);
+          }
+          if ((indices[1] != -1 && ext.isMissingValue(temp[indices[1]]))
               || ext.isMissingValue(temp[indices[2]]) || ext.isMissingValue(temp[indices[3]])) {
             continue;
           }
