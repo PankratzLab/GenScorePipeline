@@ -8,6 +8,7 @@ import java.io.PrintWriter;
 import java.util.ArrayList;
 import java.util.HashMap;
 import java.util.HashSet;
+import java.util.List;
 import java.util.Map;
 
 import org.pankratzlab.common.ArrayUtils;
@@ -596,7 +597,14 @@ public class MergeExtractPipeline {
     }
 
     if (allMarkers == null && (annotations != null && !annotations.isEmpty())) {
-      allMarkers = annotations.rowKeySet().toArray(new String[0]);
+      List<String> allMarkersList = new ArrayList<>();
+      List<String[]> allAllelesList = new ArrayList<>();
+      annotations.cellSet().forEach(c -> {
+        allMarkersList.add(c.getRowKey());
+        allAllelesList.add(c.getColumnKey().split("@"));
+      });
+      allMarkers = allMarkersList.toArray(new String[0]);
+      allAlleles = allAllelesList.toArray(new String[0][]);
     }
     if (allMarkers != null && annotations != null) {
       writeAnnotations(allMarkers, allAlleles, annotations);
