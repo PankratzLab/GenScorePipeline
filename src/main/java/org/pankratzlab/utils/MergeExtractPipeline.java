@@ -653,7 +653,7 @@ public class MergeExtractPipeline {
                          + "; adding: " + ArrayUtils.toStr(annotLabels, ","));
       for (int j = 0; j < annotLabels.length; j++) {
         Annotation ann = annMap.get(annotLabels[j]);
-        if (ann == null) {
+        if (ann == null && annArr.length > 0) {
           ann = new Annotation();
           ann.snp = snp;
           ann.alleles = alleleStr;
@@ -661,9 +661,9 @@ public class MergeExtractPipeline {
           ann.annotation = annArr[j];
           annMap.put(annotLabels[j], ann);
         } else {
-          if (ann.annotation == null || ext.isMissingValue(ann.annotation)) {
+          if ((ann.annotation == null || ext.isMissingValue(ann.annotation)) && annArr.length > 0) {
             ann.annotation = annArr[j];
-          } else if (!ann.annotation.equals(annArr[j])) {
+          } else if (annArr.length > 0 && !ann.annotation.equals(annArr[j])) {
             System.err.println("Error - DUPLICATE ANNOTATION: " + ann.annotation + " | "
                                + annArr[j]);
           }
