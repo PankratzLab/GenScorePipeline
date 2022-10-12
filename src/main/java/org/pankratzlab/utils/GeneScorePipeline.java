@@ -2552,7 +2552,7 @@ public class GeneScorePipeline {
     ArrayList<double[]> indepData = new ArrayList<>();
     MultiSet<String> invalids = new HashMultiSet<>();
     for (java.util.Map.Entry<String, PhenoIndiv> indiv : pd.indivs.entrySet()) {
-      if (scoreData.containsKey(indiv.getKey())) {
+      if (scoreData != null && scoreData.containsKey(indiv.getKey())) {
         PhenoIndiv pdi = pd.indivs.get(indiv.getKey());
         double[] baseData = new double[pd.covars.size() + covarData.size()];
         double[] covarData1 = new double[pd.covars.size() + 1 + covarData.size()];
@@ -2910,14 +2910,21 @@ public class GeneScorePipeline {
           betaWriter.print("\t");
           betaWriter.print(rrPheno.getSe());
           for (String marker : markersInOrder) {
-            RegressionResult rrResult = actualRegression(study.markerDosages.get(constr, mf)
-                                                                            .columnMap()
-                                                                            .get(marker),
-                                                         null, pd);
-            betaWriter.print("\t");
-            betaWriter.print(rrResult.getBeta());
-            betaWriter.print("\t");
-            betaWriter.print(rrResult.getSe());
+            if (study.markerDosages.get(constr, mf).columnMap().containsKey(marker)) {
+              RegressionResult rrResult = actualRegression(study.markerDosages.get(constr, mf)
+                                                                              .columnMap()
+                                                                              .get(marker),
+                                                           null, pd);
+              betaWriter.print("\t");
+              betaWriter.print(rrResult.getBeta());
+              betaWriter.print("\t");
+              betaWriter.print(rrResult.getSe());
+            } else {
+              betaWriter.print("\t");
+              betaWriter.print(".");
+              betaWriter.print("\t");
+              betaWriter.print(".");
+            }
           }
           betaWriter.println();
 
