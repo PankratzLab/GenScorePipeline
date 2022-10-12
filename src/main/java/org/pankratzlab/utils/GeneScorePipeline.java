@@ -2382,8 +2382,11 @@ public class GeneScorePipeline {
             String marker = foundMetaMarkers.get(indMkr);
             mkrNames.add(marker);
             final Map<String, Double> indivMap = columnMap.get(marker);
-            for (String ind : indivs) {
-              indivAllMkrs.get(ind)[indMkr] = indivMap.get(ind).doubleValue();
+
+            if (indivMap != null) {
+              for (String ind : indivs) {
+                indivAllMkrs.get(ind)[indMkr] = indivMap.get(ind).doubleValue();
+              }
             }
 
             RegressionResult rrResultPerMkr = actualRegression(indivMap, null, pd);
