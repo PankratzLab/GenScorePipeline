@@ -12,6 +12,7 @@ import java.util.Comparator;
 import java.util.HashMap;
 import java.util.HashSet;
 import java.util.Hashtable;
+import java.util.LinkedHashSet;
 import java.util.List;
 import java.util.Map;
 import java.util.Objects;
@@ -116,7 +117,9 @@ public class GeneScorePipeline {
   private static final String REGRESSION_HEADER = new StringJoiner("\t").add("STUDY")
                                                                         .add("DATAFILE")
                                                                         .add("INDEX-THRESHOLD")
-                                                                        .add("FACTOR")
+                                                                        .add("PHENOTYPE")
+                                                                        .add("SUBTYPE")
+                                                                        .add("VARIATE")
                                                                         .add("BASE-R-SQR")
                                                                         .add("R-SQR").add("R-DIFF")
                                                                         .add("P-VALUE")
@@ -271,7 +274,11 @@ public class GeneScorePipeline {
     // constraint -> datafile
     Table<Constraint, MetaFile, TrioScoreTest.Results> trioScoreTests = HashBasedTable.create();
     // constraint -> datafile -> phenofile
-    Table<Constraint, MetaFile, HashMap<String, RegressionResult>> regressions = HashBasedTable.create();
+    Table<Constraint, MetaFile, HashMap<PhenoData, RegressionResult>> regressions = HashBasedTable.create();
+    // constraint -> datafile -> phenofile -> marker
+    Table<Constraint, MetaFile, Table<PhenoData, String, RegressionResult>> markerRegressions = HashBasedTable.create();
+    // constraint -> datafile -> phenofile -> marker
+    Table<Constraint, MetaFile, Table<PhenoData, String, RegressionResult>> multivarRegressions = HashBasedTable.create();
     // constraint -> datafile
     Table<Constraint, MetaFile, double[]> scores = HashBasedTable.create();
     // constraint -> datafile
@@ -790,11 +797,29 @@ public class GeneScorePipeline {
 
   }
 
-  private class PhenoData {
+  private static class PhenoData {
 
     String phenoName;
     HashMap<String, PhenoIndiv> indivs = new HashMap<>();
     ArrayList<String> covars = new ArrayList<>();
+
+    @Override
+    public int hashCode() {
+      return Objects.hash(phenoName);
+    }
+
+    @Override
+    public boolean equals(Object obj) {
+      if (this == obj) {
+        return true;
+      }
+      if (!(obj instanceof PhenoData)) {
+        return false;
+      }
+      PhenoData other = (PhenoData) obj;
+      return Objects.equals(phenoName, other.phenoName);
+    }
+
   }
 
   private class PhenoIndiv {
@@ -1202,6 +1227,8 @@ public class GeneScorePipeline {
       for (Constraint constr : analysisConstraints) {
         for (MetaFile mf : metaFiles) {
           study.regressions.put(constr, mf, new HashMap<>());
+          study.markerRegressions.put(constr, mf, HashBasedTable.create());
+          study.multivarRegressions.put(constr, mf, HashBasedTable.create());
           study.indivMetaScores.put(constr, mf, new HashMap<>());
           study.markerScores.put(constr, mf, HashBasedTable.create());
           study.markerDosages.put(constr, mf, HashBasedTable.create());
@@ -1292,10 +1319,11 @@ public class GeneScorePipeline {
           dFileCnts.put(temp[1], Integer.parseInt(temp[2]));
         }
       } catch (NumberFormatException e) {
-        // TODO Auto-generated catch block
+        log.reportException(e);
         e.printStackTrace();
       } catch (IOException e) {
-        // TODO Auto-generated catch block
+        log.reportIOException(countsFile);
+        log.reportException(e);
         e.printStackTrace();
       }
     } else {
@@ -1350,10 +1378,11 @@ public class GeneScorePipeline {
               }
             }
           } catch (NumberFormatException e) {
-            // TODO Auto-generated catch block
+            log.reportException(e);
             e.printStackTrace();
           } catch (IOException e) {
-            // TODO Auto-generated catch block
+            log.reportIOException(metaDir + dFile);
+            log.reportException(e);
             e.printStackTrace();
           }
         }
@@ -1411,7 +1440,8 @@ public class GeneScorePipeline {
           }
         }
       } catch (IOException e) {
-        // TODO Auto-generated catch block
+        log.reportIOException(metaDir + cFile);
+        log.reportException(e);
         e.printStackTrace();
       }
 
@@ -1453,7 +1483,8 @@ public class GeneScorePipeline {
           mf.metaMarkers.put(mkr, new MetaMarker(mkr, beta, se, pval, freq, a1, a2));
         }
       } catch (IOException e) {
-        // TODO Auto-generated catch block
+        log.reportIOException(fullPath);
+        log.reportException(e);
         e.printStackTrace();
       }
     }
@@ -1654,10 +1685,10 @@ public class GeneScorePipeline {
         if (override) break;
       }
     } catch (NumberFormatException e) {
-      // TODO Auto-generated catch block
+      log.reportException(e);
       e.printStackTrace();
     } catch (IOException e) {
-      // TODO Auto-generated catch block
+      log.reportException(e);
       e.printStackTrace();
     }
 
@@ -2315,15 +2346,203 @@ public class GeneScorePipeline {
                             + " total trios) were excluded from paired score analyses because the children were not coded as cases in the fam data.");
         }
 
+        Set<String> mkrs = study.markerDosages.cellSet().stream()
+                                              .map(e -> e.getValue().columnKeySet())
+                                              .flatMap(s -> s.stream()).collect(Collectors.toSet());
+        List<String> markersInOrder = ImmutableList.copyOf(Sets.intersection(mkrs,
+                                                                             mf.metaMarkers.keySet()));
+
         PrintWriter writer = Files.getAppropriateWriter(metaDir + "missingPhenos.id");
         for (int i = 0; i < study.phenoFiles.size(); i++) {
           PhenoData pd = study.phenoData.get(study.phenoFiles.get(i));
           RegressionResult rrResult = actualRegression(study.indivMetaScores.get(constr, mf),
                                                        writer, pd);
-          study.regressions.get(constr, mf).put(pd.phenoName, rrResult);
+          study.regressions.get(constr, mf).put(pd, rrResult);
+
+          final Map<String, Map<String, Double>> columnMap = study.markerDosages.get(constr, mf)
+                                                                                .columnMap();
+          List<String> foundMetaMarkers = new ArrayList<>();
+          for (String marker : markersInOrder) {
+            if (mf.metaMarkers.containsKey(marker)) { // may have been dropped by meta HitWindows
+              foundMetaMarkers.add(marker);
+            }
+          }
+
+          Set<String> indivs = study.markerDosages.cellSet().stream()
+                                                  .map(e -> e.getValue().rowKeySet())
+                                                  .flatMap(s -> s.stream())
+                                                  .collect(Collectors.toSet());
+          Map<String, double[]> indivAllMkrs = new HashMap<>();
+          for (String ind : indivs) {
+            indivAllMkrs.put(ind, new double[foundMetaMarkers.size()]);
+          }
+
+          List<String> mkrNames = new ArrayList<>();
+          for (int indMkr = 0; indMkr < foundMetaMarkers.size(); indMkr++) {
+            String marker = foundMetaMarkers.get(indMkr);
+            mkrNames.add(marker);
+            final Map<String, Double> indivMap = columnMap.get(marker);
+            for (String ind : indivs) {
+              indivAllMkrs.get(ind)[indMkr] = indivMap.get(ind).doubleValue();
+            }
+
+            RegressionResult rrResultPerMkr = actualRegression(indivMap, null, pd);
+            study.markerRegressions.get(constr, mf).put(pd, marker, rrResultPerMkr);
+          }
+
+          // run regression with all markers from indivAllMarkers
+          Map<String, RegressionResult> rrResultMulti = actualRegressionMultivar(indivAllMkrs,
+                                                                                 mkrNames, null,
+                                                                                 pd);
+          rrResultMulti.forEach((s, rr1) -> {
+            study.multivarRegressions.get(constr, mf).put(pd, s, rr1);
+          });
         }
       }
     }
+  }
+
+  private Map<String, RegressionResult> actualRegressionMultivar(Map<String, double[]> scoreData,
+                                                                 List<String> scoreNames,
+                                                                 PrintWriter writer, PhenoData pd) {
+    ArrayList<Double> depData = new ArrayList<>();
+    ArrayList<double[]> baselineIndeps = new ArrayList<>();
+    ArrayList<double[]> indepData = new ArrayList<>();
+    MultiSet<String> invalids = new HashMultiSet<>();
+    for (java.util.Map.Entry<String, PhenoIndiv> indiv : pd.indivs.entrySet()) {
+      if (scoreData.containsKey(indiv.getKey())) {
+        PhenoIndiv pdi = pd.indivs.get(indiv.getKey());
+        double[] indivScoreData = scoreData.get(indiv.getKey());
+        double[] baseData = new double[pd.covars.size() + covarData.size()];
+        double[] covarData1 = new double[pd.covars.size() + indivScoreData.length
+                                         + covarData.size()];
+        System.arraycopy(indivScoreData, 0, covarData1, 0, indivScoreData.length);
+        boolean validCovars = true;
+        for (int k = 0; k < pd.covars.size(); k++) {
+          Double d = pdi.getCovars().get(pd.covars.get(k));
+          if (d == null) {
+            if (writer != null) {
+              writer.println(indiv.getKey() + "\t" + pd.covars.get(k));
+            }
+            validCovars = false;
+            invalids.add(pd.covars.get(k));
+          } else {
+            baseData[k] = d.doubleValue();
+            covarData1[indivScoreData.length + k] = d.doubleValue();
+          }
+        }
+        for (int k = 0; k < covarOrder.size(); k++) {
+          String covarKey = covarOrder.get(k);
+          Double d = covarData.get(covarKey).get(indiv.getKey());
+          if (d == null || d.isNaN()) {
+            if (writer != null) {
+              writer.println(indiv.getKey() + "\t" + covarKey);
+            }
+            validCovars = false;
+            invalids.add(covarKey);
+          } else {
+            baseData[pd.covars.size() + k] = d.doubleValue();
+            covarData1[indivScoreData.length + pd.covars.size() + k] = d.doubleValue();
+          }
+        }
+        if (validCovars) {
+          depData.add(pdi.getDepvar());
+          baselineIndeps.add(baseData);
+          indepData.add(covarData1);
+        }
+      }
+    }
+    if (invalids.uniqueSet().size() > 0) {
+      for (String k : invalids.uniqueSet()) {
+        log.reportWarning("Missing " + invalids.getCount(k) + " for covariate " + k + ".");
+      }
+    }
+
+    double[][] baseCovars = new double[baselineIndeps.size()][];
+    double[][] covars = new double[indepData.size()][];
+    for (int k = 0; k < covars.length; k++) {
+      covars[k] = indepData.get(k);
+      baseCovars[k] = baselineIndeps.get(k);
+    }
+    int cases = 0;
+    int controls = 0;
+    Multiset<Double> phenos = ImmutableMultiset.copyOf(depData);
+    if (phenos.entrySet().size() == 2) {
+      if (phenos.elementSet().equals(ImmutableSet.of(Double.valueOf(0.0), Double.valueOf(1.0)))) {
+        cases = phenos.count(Double.valueOf(1.0));
+        controls = phenos.count(Double.valueOf(0.0));
+      } else if (phenos.elementSet()
+                       .equals(ImmutableSet.of(Double.valueOf(1.0), Double.valueOf(2.0)))) {
+        cases = phenos.count(Double.valueOf(2.0));
+        controls = phenos.count(Double.valueOf(1.0));
+      } else {
+        log.reportError("Unrecognized case/control designations, cannot count cases and controls");
+      }
+    }
+    RegressionModel baseModel = RegressionModel.determineAppropriate(Doubles.toArray(depData),
+                                                                     baseCovars, false, true);
+    RegressionModel model = RegressionModel.determineAppropriate(Doubles.toArray(depData), covars,
+                                                                 false, true);
+    String[] varNames = new String[scoreNames.size() + pd.covars.size() + covarOrder.size()];
+    int index = 0;
+    for (String v : scoreNames) {
+      varNames[index++] = v;
+    }
+    for (String v : pd.covars) {
+      varNames[index++] = v;
+    }
+    for (String v : covarOrder) {
+      varNames[index++] = v;
+    }
+    model.setVarNames(varNames);
+
+    Map<String, RegressionResult> results = new HashMap<>();
+
+    log.report("Found " + model.getVarNames().length + " variables for regression ("
+               + ArrayUtils.toStr(model.getVarNames(), ",") + ")");
+
+    for (String var : scoreNames) {
+      RegressionResult.Builder rr = RegressionResult.builder();
+      rr.setNum(depData.size());
+      rr.setnCases(cases);
+      rr.setnControls(controls);
+      if (model.analysisFailed()) {
+        rr.setBaseRSq(baseModel.analysisFailed() ? Double.NaN : baseModel.getRsquare());
+        rr.setBeta(Double.NaN);
+        rr.setSe(Double.NaN);
+        rr.setRsq(Double.NaN);
+        rr.setPval(Double.NaN);
+        rr.setLogistic(model.isLogistic());
+      } else {
+        int ind = -1;
+        for (int l = 0; l < model.getVarNames().length; l++) {
+          if (var.equals(model.getVarNames()[l])) {
+            ind = l;
+            break;
+          }
+        }
+        if (ind == -1) {
+          rr.setBaseRSq(baseModel.analysisFailed() ? Double.NaN : baseModel.getRsquare());
+          rr.setBeta(Double.NaN);
+          rr.setSe(Double.NaN);
+          rr.setRsq(model.getRsquare());
+          rr.setPval(Double.NaN);
+          rr.setLogistic(model.isLogistic());
+          rr.setStats(Double.NaN);
+        } else {
+          rr.setBaseRSq(baseModel.analysisFailed() ? Double.NaN : baseModel.getRsquare());
+          rr.setBeta(model.getBetas()[ind]);
+          rr.setSe(model.getSEofBs()[ind]);
+          rr.setRsq(model.getRsquare());
+          rr.setPval(model.getSigs()[ind]);
+          rr.setLogistic(model.isLogistic());
+          rr.setStats(model.getStats()[ind]);
+        }
+      }
+      RegressionResult rrResult = rr.build();
+      results.put(var, rrResult);
+    }
+    return results;
   }
 
   private RegressionResult actualRegression(Map<String, Double> scoreData, PrintWriter writer,
@@ -2480,7 +2699,8 @@ public class GeneScorePipeline {
                                                         .toString();
 
             String middle = new StringJoiner("\t").add(pairedT).add(wilcoxon).add(pairedStatTrios)
-                                                  .add(String.valueOf(dataCounts.get(dFile)
+                                                  .toString();
+            String endPRS = new StringJoiner("\t").add(String.valueOf(dataCounts.get(dFile)
                                                                                 .get(key)))
                                                   .add(String.valueOf(study.hitWindowCnts.get(constr,
                                                                                               mf)))
@@ -2491,15 +2711,45 @@ public class GeneScorePipeline {
                                                   .add(String.valueOf(study.scores.get(constr,
                                                                                        mf)[1]))
                                                   .toString();
+            String endUNIVAR = new StringJoiner("\t").add("1").add("1").add("1")
+                                                     .add(String.valueOf(study.scores.get(constr,
+                                                                                          mf)[0]))
+                                                     .add(String.valueOf(study.scores.get(constr,
+                                                                                          mf)[1]))
+                                                     .toString();
+
             if (study.phenoFiles.isEmpty()) {
-              writeSingleResult("--", RegressionResult.dummy(), resultPrefix, middle, writer);
+              writeSingleResult("--", "PRS", "UNIVARIATE", RegressionResult.dummy(), resultPrefix,
+                                middle, endPRS, writer);
             } else {
               for (String pheno : study.phenoFiles) {
-                RegressionResult rr = study.regressions.get(constr, mf).get(pheno);
+                RegressionResult rr = study.regressions.get(constr, mf)
+                                                       .get(study.phenoData.get(pheno));
                 if (rr == null) {
                   rr = RegressionResult.dummy();
                 }
-                writeSingleResult(pheno, rr, resultPrefix, middle, writer);
+                String phenoName = pheno.endsWith(".pheno") ? pheno.substring(0, pheno.length() - 6)
+                                                            : pheno;
+
+                writeSingleResult(phenoName, "PRS", "UNIVARIATE", rr, resultPrefix, middle, endPRS,
+                                  writer);
+
+                Set<String> mkrs = new LinkedHashSet<>();
+                mkrs.addAll(study.markerRegressions.get(constr, mf).columnKeySet());
+                mkrs.addAll(study.multivarRegressions.get(constr, mf).columnKeySet());
+
+                Map<String, RegressionResult> res = study.markerRegressions.get(constr, mf)
+                                                                           .row(study.phenoData.get(pheno));
+                mkrs.stream().filter(res::containsKey).forEach(s -> {
+                  writeSingleResult(phenoName, s, "UNIVARIATE", res.get(s), resultPrefix, middle,
+                                    endUNIVAR, writer);
+                });
+                Map<String, RegressionResult> resMult = study.multivarRegressions.get(constr, mf)
+                                                                                 .row(study.phenoData.get(pheno));
+                mkrs.stream().filter(resMult::containsKey).forEach(s -> {
+                  writeSingleResult(phenoName, s, "MULTIVARIATE", resMult.get(s), resultPrefix,
+                                    middle, endPRS, writer);
+                });
               }
             }
           }
@@ -2520,8 +2770,9 @@ public class GeneScorePipeline {
     }
   }
 
-  private void writeSingleResult(String pheno, RegressionResult rr, String resultPrefix,
-                                 String middle, PrintWriter writer) {
+  private void writeSingleResult(String pheno, String subtype, String variate, RegressionResult rr,
+                                 String resultPrefix, String middle, String end,
+                                 PrintWriter writer) {
     String pvalExcl = rr.getNum() == 0 ? "."
                                        : (rr.isLogistic() ? "=(1-(NORM.S.DIST(ABS(" + rr.getBeta()
                                                             + "/" + rr.getSe() + "),TRUE)))*2"
@@ -2529,8 +2780,8 @@ public class GeneScorePipeline {
                                                             + "," + rr.getNum() + ",2)");
 
     String line = Joiner.on("\t")
-                        .join(ImmutableList.builder().add(resultPrefix).add(pheno)
-                                           .add(rr.getBaseRSq()).add(rr.getRsq())
+                        .join(ImmutableList.builder().add(resultPrefix).add(pheno).add(subtype)
+                                           .add(variate).add(rr.getBaseRSq()).add(rr.getRsq())
                                            .add((Double.isNaN(rr.getRsq()) ? Double.NaN
                                                                            : (Double.isNaN(rr.getBaseRSq()) ? rr.getRsq()
                                                                                                             : (new BigDecimal(rr.getRsq()
@@ -2538,7 +2789,7 @@ public class GeneScorePipeline {
                                                                                                                                                              + "")))))
                                            .add(rr.getPval()).add(pvalExcl).add(rr.getBeta())
                                            .add(rr.getSe()).add(rr.getNum()).add(rr.getnCases())
-                                           .add(rr.getnControls()).add(middle).build());
+                                           .add(rr.getnControls()).add(middle).add(end).build());
 
     writer.println(line);
 
@@ -2598,10 +2849,13 @@ public class GeneScorePipeline {
 
           for (String marker : markersInOrder) {
             if (mf.metaMarkers.containsKey(marker)) { // may have been dropped by meta HitWindows
-              RegressionResult rrResult = actualRegression(study.markerDosages.get(constr, mf)
-                                                                              .columnMap()
-                                                                              .get(marker),
-                                                           null, pd);
+              RegressionResult rrResult = study.markerRegressions.get(constr, mf).get(pd.phenoName,
+                                                                                      marker);
+              if (rrResult == null) {
+                System.out.println("No regression for " + marker);
+                continue;
+              }
+
               MetaMarker metaMarker = mf.metaMarkers.get(marker);
               double metaBeta = metaMarker.beta;
               double metaSE = metaMarker.se;
@@ -2649,7 +2903,7 @@ public class GeneScorePipeline {
         for (int i = 0; i < study.phenoFiles.size(); i++) {
           String pheno = study.phenoFiles.get(i);
           PhenoData pd = study.phenoData.get(pheno);
-          RegressionResult rrPheno = study.regressions.get(constr, mf).get(pd.phenoName);
+          RegressionResult rrPheno = study.regressions.get(constr, mf).get(pd);
           betaWriter.print(pheno);
           betaWriter.print("\t");
           betaWriter.print(rrPheno.getBeta());

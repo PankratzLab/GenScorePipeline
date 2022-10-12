@@ -6,10 +6,13 @@ import java.io.FilenameFilter;
 import java.io.IOException;
 import java.io.PrintWriter;
 import java.util.ArrayList;
+import java.util.Arrays;
 import java.util.HashMap;
 import java.util.HashSet;
 import java.util.List;
 import java.util.Map;
+import java.util.Set;
+import java.util.stream.Collectors;
 
 import org.pankratzlab.common.ArrayUtils;
 import org.pankratzlab.common.CmdLine;
@@ -25,7 +28,10 @@ import org.pankratzlab.utils.filesys.SnpMarkerSet;
 import org.pankratzlab.utils.gwas.DosageData;
 
 import com.google.common.collect.HashBasedTable;
+import com.google.common.collect.Range;
+import com.google.common.collect.RangeSet;
 import com.google.common.collect.Table;
+import com.google.common.collect.TreeRangeSet;
 
 public class MergeExtractPipeline {
 
@@ -531,13 +537,11 @@ public class MergeExtractPipeline {
                                                        .markerNamePrepend(renameMarkers ? dataSources.get(0).label
                                                                                         : "")
                                                        .logger(log).build();
-    Table<String, String, HashMap<String, Annotation>> annotations = null;
-    if (dataSources.get(0).mapFile != null && !ext.isMissingValue(dataSources.get(0).mapFile)) {
-      annotations = getAnnotations(dd1,
-                                   getAnnotationLabels(dataSources.get(0).dataFile,
-                                                       dataSources.get(0).mapFile,
-                                                       dataSources.get(0).label));
-    }
+    Table<String, String, HashMap<String, Annotation>> annotations = getAnnotations(dd1,
+                                                                                    getAnnotationLabels(dd1,
+                                                                                                        dataSources.get(0).dataFile,
+                                                                                                        dataSources.get(0).mapFile,
+                                                                                                        dataSources.get(0).label));
     for (int i = 1; i < dataSources.size(); i++) {
       System.gc();
       log.report("... merging with data file: " + dataSources.get(i).dataFile);
@@ -551,16 +555,13 @@ public class MergeExtractPipeline {
                                                                                           : "")
                                                          .logger(log).build();
       if (!dd2.isEmpty()) {
-        if (annotations != null && !ext.isMissingValue(dataSources.get(i).mapFile)) {
-          String[] dd2Annots = getAnnotationLabels(dataSources.get(i).dataFile,
-                                                   dataSources.get(i).mapFile,
-                                                   dataSources.get(i).label);
-          if (dd2Annots != null && dd2Annots.length > 0
-              && dd2.getMarkerSet().getAnnotation() != null) {
-            combineAnnotations(annotations, dd2Annots, dd2.getMarkerSet().getAnnotation(),
-                               dd2.getMarkerSet().getMarkerNames(),
-                               dd2.getMarkerSet().getAlleles());
-          }
+        String[] dd2Annots = getAnnotationLabels(dd2, dataSources.get(i).dataFile,
+                                                 dataSources.get(i).mapFile,
+                                                 dataSources.get(i).label);
+        if (dd2Annots != null && dd2Annots.length > 0
+            && dd2.getMarkerSet().getAnnotation() != null) {
+          combineAnnotations(annotations, dd2Annots, dd2.getMarkerSet().getAnnotation(),
+                             dd2.getMarkerSet().getMarkerNames(), dd2.getMarkerSet().getAlleles());
         }
         dd1 = DosageData.combine(dd1, dd2, DosageData.COMBINE_OP.EITHER_IF_OTHER_MISSING,
                                  bestGuessOutput, bestGuessThreshold, log);
@@ -612,6 +613,42 @@ public class MergeExtractPipeline {
 
     for (String f : tempMarkerFiles) {
       new File(f).delete();
+    }
+
+    if (markers != null) {
+      // compute not-found markers
+      Set<String> inputMarkers = new HashSet<>(Arrays.asList(markers));
+      Set<String> foundMarkers = new HashSet<>(Arrays.asList(allMarkers));
+      inputMarkers.removeAll(foundMarkers);
+      Files.writeIterable(inputMarkers, getOutputMapFile() + ".markers.notFound");
+    } else if (regions != null) {
+      // compute not-found regions
+      Map<Integer, RangeSet<Integer>> chrRangeSets = new HashMap<>();
+      for (int[] rang : regions) {
+        if (!chrRangeSets.containsKey(rang[0])) {
+          chrRangeSets.put(rang[0], TreeRangeSet.create());
+        }
+        chrRangeSets.get(rang[0]).add(Range.closed(rang[1], rang[2]));
+      }
+
+      SnpMarkerSet mkrSet = dd1.getMarkerSet();
+      for (int[] chrpos : mkrSet.getChrAndPositionsAsInts()) {
+        if (chrRangeSets.containsKey(chrpos[0])) {
+          if (chrRangeSets.get(chrpos[0]).contains(chrpos[1])) {
+            chrRangeSets.get(chrpos[0])
+                        .remove(chrRangeSets.get(chrpos[0]).rangeContaining(chrpos[1]));
+          }
+        }
+      }
+
+      // remaining ranges are not-found
+      PrintWriter writer = Files.getAppropriateWriter(getOutputMapFile() + ".regions.notFound");
+      for (int chr : chrRangeSets.keySet()) {
+        chrRangeSets.get(chr).asDescendingSetOfRanges().forEach(r -> {
+          writer.println("chr" + chr + ":" + r.lowerEndpoint() + "-" + r.upperEndpoint());
+        });
+      }
+      writer.close();
     }
 
     System.gc();
@@ -712,10 +749,18 @@ public class MergeExtractPipeline {
     writer.close();
   }
 
-  private String[] getAnnotationLabels(String dataFile, String mapFile, String prepend) {
+  private String[] getAnnotationLabels(DosageData dd, String dataFile, String mapFile,
+                                       String prepend) {
     int type1 = DosageData.determineType(dataFile);
     if (type1 == DosageData.BGEN_FORMAT) {
       return new String[] {"MAF", "MinorAllele", "INFO"};
+    }
+    if (type1 == DosageData.VCF_FORMAT) {
+      String[] annots = Arrays.stream(dd.getMarkerSet().getAnnotation()).flatMap(Arrays::stream)
+                              .map(s -> s.split(";")).flatMap(Arrays::stream)
+                              .map(s -> s.split("=")[0]).distinct().collect(Collectors.toList())
+                              .toArray(new String[0]);
+      return annots;
     }
     int type = SnpMarkerSet.determineType(mapFile, log);
     if (type == -1) {
