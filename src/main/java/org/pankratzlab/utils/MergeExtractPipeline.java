@@ -617,10 +617,17 @@ public class MergeExtractPipeline {
 
     if (markers != null) {
       // compute not-found markers
+      Set<String> remainingMarkers = new HashSet<>(Arrays.asList(markers));
       Set<String> inputMarkers = new HashSet<>(Arrays.asList(markers));
       Set<String> foundMarkers = new HashSet<>(Arrays.asList(allMarkers));
-      inputMarkers.removeAll(foundMarkers);
-      Files.writeIterable(inputMarkers, getOutputMapFile() + ".markers.notFound");
+      for (String mk : inputMarkers) {
+        for (String fnd : foundMarkers) {
+          if (fnd.equals(mk) || fnd.startsWith(mk)) {
+            remainingMarkers.remove(mk);
+          }
+        }
+      }
+      Files.writeIterable(remainingMarkers, getOutputMapFile() + ".markers.notFound");
     } else if (regions != null) {
       // compute not-found regions
       Map<Integer, RangeSet<Integer>> chrRangeSets = new HashMap<>();
@@ -740,6 +747,9 @@ public class MergeExtractPipeline {
             annots[k] = ".";
           } else {
             annots[k] = ann.get(allLabels.get(k)).annotation;
+            if (annots[k].contains("=")) {
+              annots[k] = annots[k].split("=")[1];
+            }
           }
         }
       }
