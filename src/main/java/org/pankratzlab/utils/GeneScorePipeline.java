@@ -2852,8 +2852,7 @@ public class GeneScorePipeline {
 
           for (String marker : markersInOrder) {
             if (mf.metaMarkers.containsKey(marker)) { // may have been dropped by meta HitWindows
-              RegressionResult rrResult = study.markerRegressions.get(constr, mf).get(pd.phenoName,
-                                                                                      marker);
+              RegressionResult rrResult = study.markerRegressions.get(constr, mf).get(pd, marker);
               if (rrResult == null) {
                 System.out.println("No regression for " + marker);
                 continue;
