@@ -109,6 +109,7 @@ public class GeneScorePipeline {
 
   private static final String CROSS_FILTERED_DATAFILE = "bimData.xln";
   private static final String DATA_SOURCE_FILENAME = "data.txt";
+  private static final String META_DIRECTORY = "meta_results";
 
   private static final String MARKER_COL_NAME = "Marker";
   private static final String EFFECT_ALLELE_COL_NAME = "EffectAllele";
@@ -164,17 +165,19 @@ public class GeneScorePipeline {
     public String metaRoot;
     public Map<String, MetaMarker> metaMarkers;
     public Map<String, String> markerAliasLookup;
+    private final int hash;
 
     public MetaFile(String file) {
       this.metaFile = file;
       this.metaRoot = ext.rootOf(file, false);
       this.metaMarkers = new HashMap<>();
       this.markerAliasLookup = new HashMap<>();
+      this.hash = Objects.hash(metaFile, metaRoot);
     }
 
     @Override
     public int hashCode() {
-      return Objects.hash(metaFile, metaRoot);
+      return hash;
     }
 
     @Override
@@ -765,6 +768,7 @@ public class GeneScorePipeline {
     final int windowMinSizePerSide;
     final float windowExtensionThreshold;
     final String analysisString;
+    final int hash;
 
     public Constraint(float i, int m, float w) {
       indexThreshold = i;
@@ -777,11 +781,12 @@ public class GeneScorePipeline {
                                           .append(ext.formSciNot(windowExtensionThreshold, 4,
                                                                  false))
                                           .toString();
+      hash = Objects.hash(indexThreshold, windowExtensionThreshold, windowMinSizePerSide);
     }
 
     @Override
     public int hashCode() {
-      return Objects.hash(indexThreshold, windowExtensionThreshold, windowMinSizePerSide);
+      return hash;
     }
 
     @Override
@@ -1266,6 +1271,8 @@ public class GeneScorePipeline {
     File[] fs = dir.listFiles();
     for (File f : fs) {
       if (f.isDirectory()) {
+        // ignore meta results directory
+        if (f.getName().equals(META_DIRECTORY)) continue;
         Study study = new Study();
         study.studyName = ext.rootOf(f.getAbsolutePath(), true);
         study.studyDir = f.getAbsolutePath() + "/";
@@ -2161,6 +2168,9 @@ public class GeneScorePipeline {
       String dataFile = mf.metaRoot;
       for (Constraint constr : analysisConstraints) {
         String analysisKey = constr.analysisString;
+
+        log.report("Setting up for PRS computation for {" + dataFile + "\t" + analysisKey + "}");
+
         File prefDir = new File(getDirPath(study, dataFile, analysisKey));
         if (!prefDir.exists()) {
           log.report("Error - no subfolder for '" + analysisKey + "' analysis");
@@ -2177,10 +2187,13 @@ public class GeneScorePipeline {
         String[][] ids = data.getIds();
         float[][] dose = data.getDosageValues();
         if (dose == null) {
-          data.computeDosageValues(log);
-          dose = data.getDosageValues();
+          if (data.hasGenotypeProbabilities()) {
+            data.computeDosageValues(log);
+            dose = data.getDosageValues();
+          }
         }
-        if (dose == null) {
+
+        if (dose == null || dose.length == 0) {
           log.reportError("No dosage data available for {" + dataFile + "\t" + analysisKey + "}");
           continue;
         }
@@ -2234,9 +2247,11 @@ public class GeneScorePipeline {
           matchedMarkerFreqs.put(mkr, tot / cnt);
         }
 
+        log.report("Computing PRS for {" + dataFile + "\t" + analysisKey + "} with "
+                   + matchedMarkerIndices.size() + " markers and " + ids.length + " samples...");
         for (int i = 0; i < ids.length; i++) {
-          float scoreSum = 0;
-          float cnt2 = 0;
+          double scoreSum = 0;
+          double cnt2 = 0;
           int cnt = 0;
 
           int numMkrs = matchedMarkerIndices.size();
@@ -2244,7 +2259,7 @@ public class GeneScorePipeline {
             String mkr = mkrIndexEntry.getKey();
             int mkrIndex = mkrIndexEntry.getValue();
             float dosage = dose[mkrIndex][i];
-            double mkrDose = Float.NaN;
+            double mkrDose = Double.NaN;
             boolean isNaN = Float.isNaN(dosage);
             float mkrFrq = matchedMarkerFreqs.get(mkr);
             boolean nanFrq = Float.isNaN(mkrFrq);
@@ -2257,12 +2272,15 @@ public class GeneScorePipeline {
                 hitMarker = hitMarkerData.get(mkr);
               }
               if (hitMarker == null) {
-                log.report("No HitMarker data available for " + mkr);
+                log.report("No HitMarker data available for " + mkr
+                           + ((mkrIndexEntry.getKey().equals(mkr)) ? ""
+                                                                   : (" (" + mkrIndexEntry.getKey()
+                                                                      + ")")));
                 continue;
               }
             }
-            float beta = hitMarker.getEffect().floatValue();
-            float mkrScr = Float.NaN;
+            double beta = hitMarker.getEffect();
+            double mkrScr = Double.NaN;
 
             if (alleleOrder.equals(StrandOps.AlleleOrder.OPPOSITE)) {
               cnt += isNaN ? 0 : 1;
@@ -2271,20 +2289,18 @@ public class GeneScorePipeline {
             } else if (alleleOrder.equals(StrandOps.AlleleOrder.SAME)) {
               cnt += isNaN ? 0 : 1;
               cnt2 += isNaN ? 0 : (mkrDose = (2.0 - dosage));
-              mkrScr = (float) ((2.0 - (isNaN ? (nanFrq ? 0 : mkrFrq) : dosage)) * beta);
+              mkrScr = ((2.0 - (isNaN ? (nanFrq ? 0 : mkrFrq) : dosage)) * beta);
             } else {
               throw new IllegalStateException("Mismatched alleles were not caught when cross-filtering");
             }
             scoreSum += mkrScr;
-            study.markerScores.get(constr, mf).put(ids[i][0] + "\t" + ids[i][1], mkr,
-                                                   (double) mkrScr);
+            study.markerScores.get(constr, mf).put(ids[i][0] + "\t" + ids[i][1], mkr, mkrScr);
             study.markerDosages.get(constr, mf).put(ids[i][0] + "\t" + ids[i][1], mkr, mkrDose);
           }
 
           double mkrRatio = cnt / (double) numMkrs;
           if (mkrRatio > minMissThresh) {
-            study.indivMetaScores.get(constr, mf).put(ids[i][0] + "\t" + ids[i][1],
-                                                      (double) scoreSum);
+            study.indivMetaScores.get(constr, mf).put(ids[i][0] + "\t" + ids[i][1], scoreSum);
             study.indivScoreData.put(constr, ids[i][0] + "\t" + ids[i][1],
                                      new double[] {mkrRatio, 2 * cnt, cnt2});
           } else {
