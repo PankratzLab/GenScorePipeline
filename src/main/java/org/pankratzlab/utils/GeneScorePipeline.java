@@ -2880,18 +2880,20 @@ public class GeneScorePipeline {
 
               double markerBeta = rrResult.getBeta();
               double markerSE = rrResult.se;
-              markerWriter.println(resultPrefix + "\t" + pheno + "\t" + marker + "\t" + metaBeta
-                                   + "\t" + metaSE + "\t" + markerBeta + "\t" + markerSE);
 
-              twoSampleExposure.println(marker + "\t" + metaMarker.a1 + "\t" + metaMarker.a2 + "\t"
-                                        + metaMarker.freq + "\t" + metaBeta + "\t" + metaSE + "\t"
-                                        + metaMarker.pval + "\tExposure");
+              if (!Double.isNaN(markerBeta) && !Double.isNaN(markerSE)) {
+                markerWriter.println(resultPrefix + "\t" + pheno + "\t" + marker + "\t" + metaBeta
+                                     + "\t" + metaSE + "\t" + markerBeta + "\t" + markerSE);
 
-              String FREQ = ".";
-              twoSampleOutcome.println(marker + "\t" + metaMarker.a1 + "\t" + metaMarker.a2 + "\t"
-                                       + FREQ + "\t" + markerBeta + "\t" + markerSE + "\t"
-                                       + rrResult.getPval() + "\tOutcome");
+                twoSampleExposure.println(marker + "\t" + metaMarker.a1 + "\t" + metaMarker.a2
+                                          + "\t" + metaMarker.freq + "\t" + metaBeta + "\t" + metaSE
+                                          + "\t" + metaMarker.pval + "\tExposure");
 
+                String FREQ = ".";
+                twoSampleOutcome.println(marker + "\t" + metaMarker.a1 + "\t" + metaMarker.a2 + "\t"
+                                         + FREQ + "\t" + markerBeta + "\t" + markerSE + "\t"
+                                         + rrResult.getPval() + "\tOutcome");
+              }
             }
           }
           twoSampleExposure.close();
