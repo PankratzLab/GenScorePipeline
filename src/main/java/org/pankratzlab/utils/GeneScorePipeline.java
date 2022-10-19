@@ -20,7 +20,9 @@ import java.util.Optional;
 import java.util.Set;
 import java.util.StringJoiner;
 import java.util.Vector;
+import java.util.concurrent.ConcurrentHashMap;
 import java.util.stream.Collectors;
+import java.util.stream.IntStream;
 
 import org.apache.commons.collections4.MultiSet;
 import org.apache.commons.collections4.multiset.HashMultiSet;
@@ -268,7 +270,8 @@ public class GeneScorePipeline {
     String dataSource;
     ArrayList<DataSource> dataSources;
     // dataFile, constraint -> DosageData
-    Table<MetaFile, Constraint, DosageData> data = HashBasedTable.create();
+    Table<Constraint, MetaFile, DosageData> data = HashBasedTable.create();
+    Table<Constraint, MetaFile, Map<String, Integer>> markerDosageIndices = HashBasedTable.create();
 
     ArrayList<String> phenoFiles = new ArrayList<>();
 
@@ -290,9 +293,14 @@ public class GeneScorePipeline {
     Table<Constraint, MetaFile, Integer> hitWindowCnts = HashBasedTable.create();
     // constraint -> datafile -> markerName
     Table<Constraint, MetaFile, Map<String, HitMarker>> markerData = HashBasedTable.create();
-    // constraint -> marker -> id1\tid2 -> score
-    Table<Constraint, MetaFile, Table<String, String, Double>> markerScores = HashBasedTable.create();
-    Table<Constraint, MetaFile, Table<String, String, Double>> markerDosages = HashBasedTable.create();
+    // constraint -> datafile -> markerName
+    Table<Constraint, MetaFile, Map<String, Integer>> matchedMarkerIndices = HashBasedTable.create();
+    // constraint -> marker -> score[id1\tid2][matchedMarkerIndex]
+    Table<Constraint, MetaFile, double[][]> matchedMarkerScores = HashBasedTable.create();
+    // constraint -> marker -> dosage[id1\tid2][matchedMarkerIndex]
+    // dosages are replicated here because if alleles are flipped, dosages are flipped (2 - dose)
+    // so unfortunately we can't just use the raw dosage data from the data table
+    Table<Constraint, MetaFile, double[][]> matchedMarkerDosages = HashBasedTable.create();
     // constraint -> MetaFile -> id1\tid2 -> score
     Table<Constraint, MetaFile, Map<String, Double>> indivMetaScores = HashBasedTable.create();
     // constraint -> id1\tid2 -> mkrRatio, 2 * cnt, cnt2
@@ -303,7 +311,7 @@ public class GeneScorePipeline {
       allConstraints.addAll(regressions.rowKeySet());
       allConstraints.addAll(scores.rowKeySet());
       allConstraints.addAll(markerData.rowKeySet());
-      allConstraints.addAll(markerScores.rowKeySet());
+      allConstraints.addAll(matchedMarkerScores.rowKeySet());
       allConstraints.addAll(indivMetaScores.rowKeySet());
       allConstraints.addAll(indivScoreData.rowKeySet());
 
@@ -316,7 +324,8 @@ public class GeneScorePipeline {
       Set<String> allIndivs = new HashSet<>();
       indivMetaScores.cellSet().stream().forEach(c -> allIndivs.addAll(c.getValue().keySet()));
       allIndivs.addAll(indivScoreData.columnKeySet());
-      markerScores.cellSet().stream().forEach(c -> allIndivs.addAll(c.getValue().rowKeySet()));
+
+      Table<Constraint, MetaFile, Map<String, Integer>> idIndices = HashBasedTable.create();
 
       for (Constraint constr : allConstraints) {
         PrintWriter writer = Files.getAppropriateWriter(studyDir + constr.analysisString
@@ -327,6 +336,12 @@ public class GeneScorePipeline {
           writer.print("\tSCORE_" + mf.metaRoot);
         }
         for (MetaFile mf : allMetas) {
+          String[][] dataIds = this.data.get(constr, mf).getIds();
+          Map<String, Integer> idIndexMap = new ConcurrentHashMap<>();
+          IntStream.range(0, dataIds.length).parallel()
+                   .forEach(ind -> idIndexMap.put(dataIds[ind][0] + "\t" + dataIds[ind][1], ind));
+          idIndices.put(constr, mf, idIndexMap);
+
           Map<String, HitMarker> hitMarkerData = markerData.get(constr, mf);
           for (String mkr : hitMarkerData.keySet()) {
             HitMarker hm = hitMarkerData.get(mkr);
@@ -347,18 +362,27 @@ public class GeneScorePipeline {
         Multiset<String> missingPhenos = HashMultiset.create();
 
         for (String indiv : allIndivs) {
-          writer.print(indiv);
+          StringJoiner sj = new StringJoiner("\t");
+          sj.add(indiv);
           for (MetaFile mf : allMetas) {
-            writer.print("\t");
-            writer.print(indivMetaScores.get(constr, mf).get(indiv));
+            sj.add(indivMetaScores.get(constr, mf).get(indiv).toString());
           }
           // metaFiles by SNPS (meta_SNP)
           for (MetaFile mf : allMetas) {
             Map<String, HitMarker> hitMarkerData = markerData.get(constr, mf);
+            final double[][] ds = matchedMarkerDosages.get(constr, mf);
+
             for (String mkr : hitMarkerData.keySet()) {
-              Double dosage = markerDosages.get(constr, mf).get(indiv, mkr);
-              writer.print("\t" + (dosage == null ? "." : dosage.doubleValue()));
+              final Integer idInd = idIndices.get(constr, mf).get(indiv);
+              final Integer mkrIndex = matchedMarkerIndices.get(constr, mf).get(mkr);
+              if (idInd != null && mkrIndex != null) {
+                double dosage = ds[idInd][mkrIndex];
+                sj.add(Double.toString(dosage));
+              } else {
+                sj.add(".");
+              }
             }
+
           }
           // phenoFiles by phenos/covars (pheno_pheno, pheno_covar1)
           for (String pheno : phenoData.keySet()) {
@@ -369,20 +393,20 @@ public class GeneScorePipeline {
               if (missingPhenos.count(pheno) <= printMissingPerPheno) {
                 log.reportWarning("ID " + indiv + " not found for phenotype " + pheno);
               }
-              writer.print("\t.");
+              sj.add(".");
               for (@SuppressWarnings("unused")
               String covar : pd.covars) {
-                writer.print("\t.");
+                sj.add(".");
               }
             } else {
               Map<String, Double> covars = pi.covars;
-              writer.print("\t" + pi.getDepvar());
+              sj.add(Double.toString(pi.getDepvar()));
               for (String covar : pd.covars) {
-                writer.print("\t" + covars.get(covar));
+                sj.add(covars.get(covar).toString());
               }
             }
           }
-          writer.println();
+          writer.println(sj.toString());
         }
         writer.close();
         missingPhenos.entrySet().stream().filter(e -> e.getCount() > printMissingPerPheno)
@@ -403,10 +427,10 @@ public class GeneScorePipeline {
      */
     public HashSet<String> retrieveMarkers(MetaFile mf, Constraint constr, Set<String> hitMkrSet) {
       HashSet<String> returnMarkers = new HashSet<>();
-      if (data.get(mf, constr).isEmpty()) {
+      if (data.get(constr, mf).isEmpty()) {
         return returnMarkers;
       }
-      String[] mkrs = data.get(mf, constr).getMarkerSet().getMarkerNames();
+      String[] mkrs = data.get(constr, mf).getMarkerSet().getMarkerNames();
       for (String mkr : mkrs) {
         if (hitMkrSet.contains(mkr)) {
           returnMarkers.add(mkr);
@@ -472,13 +496,13 @@ public class GeneScorePipeline {
           if (d0.isEmpty()) {
             log.reportError("no data for key: " + mf.metaRoot + "\t" + constr.analysisString);
           }
-          data.put(mf, constr, d0);
+          data.put(constr, mf, d0);
           d0.serialize(serOutput);
           System.gc();
         } else {
           log.report("" + serOutput + " already exists, loading previously loaded data for "
                      + dataSource);
-          data.put(mf, constr, DosageData.load(serOutput));
+          data.put(constr, mf, DosageData.load(serOutput));
         }
       }
     }
@@ -1214,10 +1238,6 @@ public class GeneScorePipeline {
     this.runMetaHW = runMetaHW;
     this.rLibsDir = rLibsDir;
     this.plotOddsRatio = plotOddsRatio;
-    // this.numThreads = numThreads;
-    // this.runPlink = plink;
-    // this.runRegression = runPlink && regression;
-    // this.writeHist = runPlink && histogram;
     this.minMissThresh = missThresh;
     this.indexThresholds = indexThresholds;
     windowMinSizePerSides = windowMins;
@@ -1235,8 +1255,6 @@ public class GeneScorePipeline {
           study.markerRegressions.put(constr, mf, HashBasedTable.create());
           study.multivarRegressions.put(constr, mf, HashBasedTable.create());
           study.indivMetaScores.put(constr, mf, new HashMap<>());
-          study.markerScores.put(constr, mf, HashBasedTable.create());
-          study.markerDosages.put(constr, mf, HashBasedTable.create());
         }
       }
     }
@@ -1850,7 +1868,7 @@ public class GeneScorePipeline {
           study.hitSnpCounts.put(constraint, mf, Files.countLines(crossFilterFile, 1));
           continue;
         }
-        if (study.data.get(mf, constraint).isEmpty()) {
+        if (study.data.get(constraint, mf).isEmpty()) {
           study.hitSnpCounts.put(constraint, mf, 0);
           continue;
         }
@@ -1858,7 +1876,7 @@ public class GeneScorePipeline {
         log.report("Cross-filtering data and .meta files [ --> '" + crossFilterFile + "']");
         HashMap<String, GenomicPosition> mkrsMeta = new HashMap<>();
         Map<String, String[]> mkrAlleles = new HashMap<>();
-        SnpMarkerSet markerSet = study.data.get(mf, constraint).getMarkerSet();
+        SnpMarkerSet markerSet = study.data.get(constraint, mf).getMarkerSet();
         List<Integer> inval = new ArrayList<>();
         List<Integer> ambig = new ArrayList<>();
 
@@ -2070,7 +2088,7 @@ public class GeneScorePipeline {
           study.hitWindowCnts.put(constr, mf, Files.countLines(hitsFile, 1));
           continue;
         }
-        if (study.data.get(mf, constr).isEmpty()) {
+        if (study.data.get(constr, mf).isEmpty()) {
           continue;
         }
         if (!Files.exists(crossFilterFile, true)) {
@@ -2101,7 +2119,7 @@ public class GeneScorePipeline {
       String dataFile = mf.metaRoot;
 
       for (Constraint constr : analysisConstraints) {
-        if (study.data.get(mf, constr).isEmpty()) {
+        if (study.data.get(constr, mf).isEmpty()) {
           study.markerData.put(constr, mf, new HashMap<>());
           continue;
         }
@@ -2176,7 +2194,7 @@ public class GeneScorePipeline {
           log.report("Error - no subfolder for '" + analysisKey + "' analysis");
           continue;
         }
-        DosageData data = study.data.get(mf, constr);
+        DosageData data = study.data.get(constr, mf);
         if (data.isEmpty()) {
           log.reportError("Dosage data was empty for {" + dataFile + "\t" + analysisKey + "}");
           continue;
@@ -2200,12 +2218,19 @@ public class GeneScorePipeline {
 
         String[] markers = data.getMarkerSet().getMarkerNames();
         String[][] alleles = data.getMarkerSet().getAlleles();
-        Map<String, Integer> matchedMarkerIndices = new HashMap<>();
+
+        study.markerDosageIndices.put(constr, mf, new HashMap<>());
+        study.matchedMarkerIndices.put(constr, mf, new HashMap<>());
+        Map<String, Integer> markerDosageIndices = study.markerDosageIndices.get(constr, mf);
+        Map<String, Integer> matchedMarkerIndices = study.matchedMarkerIndices.get(constr, mf);
+
         Map<String, Float> matchedMarkerFreqs = new HashMap<>();
         Map<String, AlleleOrder> matchedMarkerAlleleOrders = new HashMap<>();
 
+        int index = 0;
         for (int m = 0; m < markers.length; m++) {
           String mkr = markers[m];
+          markerDosageIndices.put(mkr, m);
           HitMarker hitMarker = hitMarkerData.get(mkr);
           if (hitMarker == null) {
             if (mf.markerAliasLookup.containsKey(mkr)) {
@@ -2235,7 +2260,7 @@ public class GeneScorePipeline {
             continue;
           }
           matchedMarkerAlleleOrders.put(mkr, alleleOrder);
-          matchedMarkerIndices.put(mkr, m);
+          matchedMarkerIndices.put(mkr, index++);
           int cnt = 0;
           float tot = 0;
           for (int i = 0; i < ids.length; i++) {
@@ -2249,16 +2274,27 @@ public class GeneScorePipeline {
 
         log.report("Computing PRS for {" + dataFile + "\t" + analysisKey + "} with "
                    + matchedMarkerIndices.size() + " markers and " + ids.length + " samples...");
+
+        double[][] markerScores = new double[ids.length][];
+        double[][] markerDosages = new double[ids.length][];
+        study.matchedMarkerScores.put(constr, mf, markerScores);
+        study.matchedMarkerDosages.put(constr, mf, markerDosages);
+
         for (int i = 0; i < ids.length; i++) {
           double scoreSum = 0;
           double cnt2 = 0;
           int cnt = 0;
 
           int numMkrs = matchedMarkerIndices.size();
+
+          markerScores[i] = new double[numMkrs];
+          markerDosages[i] = new double[numMkrs];
+
           for (Map.Entry<String, Integer> mkrIndexEntry : matchedMarkerIndices.entrySet()) {
             String mkr = mkrIndexEntry.getKey();
-            int mkrIndex = mkrIndexEntry.getValue();
-            float dosage = dose[mkrIndex][i];
+            int mkrDosageIndex = markerDosageIndices.get(mkr);
+            int mkrMatchedIndex = mkrIndexEntry.getValue();
+            float dosage = dose[mkrDosageIndex][i];
             double mkrDose = Double.NaN;
             boolean isNaN = Float.isNaN(dosage);
             float mkrFrq = matchedMarkerFreqs.get(mkr);
@@ -2276,6 +2312,8 @@ public class GeneScorePipeline {
                            + ((mkrIndexEntry.getKey().equals(mkr)) ? ""
                                                                    : (" (" + mkrIndexEntry.getKey()
                                                                       + ")")));
+                markerScores[i][mkrMatchedIndex] = Double.NaN;
+                markerDosages[i][mkrMatchedIndex] = Double.NaN;
                 continue;
               }
             }
@@ -2294,8 +2332,12 @@ public class GeneScorePipeline {
               throw new IllegalStateException("Mismatched alleles were not caught when cross-filtering");
             }
             scoreSum += mkrScr;
-            study.markerScores.get(constr, mf).put(ids[i][0] + "\t" + ids[i][1], mkr, mkrScr);
-            study.markerDosages.get(constr, mf).put(ids[i][0] + "\t" + ids[i][1], mkr, mkrDose);
+            // scoreTable.put(ids[i][0] + "\t" + ids[i][1], mkr, mkrScr);
+            // dosageTable.put(ids[i][0] + "\t" + ids[i][1], mkr, mkrDose);
+
+            markerScores[i][mkrMatchedIndex] = mkrScr;
+            markerDosages[i][mkrMatchedIndex] = mkrDose;
+
           }
 
           double mkrRatio = cnt / (double) numMkrs;
@@ -2323,11 +2365,11 @@ public class GeneScorePipeline {
   private void runRegression(Study study) {
     for (MetaFile mf : metaFiles) {
       for (Constraint constr : analysisConstraints) {
-        if (study.data.get(mf, constr).isEmpty()) {
+        if (study.data.get(constr, mf).isEmpty()) {
           continue;
         }
 
-        DosageData data = study.data.get(mf, constr);
+        DosageData data = study.data.get(constr, mf);
         String[][] ids = data.getIds();
         TrioScoreTest trioTests = new TrioScoreTest();
 
@@ -2362,11 +2404,13 @@ public class GeneScorePipeline {
                             + " total trios) were excluded from paired score analyses because the children were not coded as cases in the fam data.");
         }
 
-        Set<String> mkrs = study.markerDosages.cellSet().stream()
-                                              .map(e -> e.getValue().columnKeySet())
-                                              .flatMap(s -> s.stream()).collect(Collectors.toSet());
-        List<String> markersInOrder = ImmutableList.copyOf(Sets.intersection(mkrs,
-                                                                             mf.metaMarkers.keySet()));
+        Set<String> mkrs = study.matchedMarkerIndices.get(constr, mf).keySet();
+        Set<String> intersectMkrs = Sets.intersection(mkrs, mf.metaMarkers.keySet());
+        List<String> markersInOrder = new ArrayList<>(intersectMkrs);
+        final Map<String, Integer> map = study.matchedMarkerIndices.get(constr, mf);
+        markersInOrder.sort((m1, m2) -> {
+          return map.getOrDefault(m1, -1).compareTo(map.getOrDefault(m2, -1));
+        });
 
         PrintWriter writer = Files.getAppropriateWriter(metaDir + "missingPhenos.id");
         for (int i = 0; i < study.phenoFiles.size(); i++) {
@@ -2375,8 +2419,7 @@ public class GeneScorePipeline {
                                                        writer, pd);
           study.regressions.get(constr, mf).put(pd, rrResult);
 
-          final Map<String, Map<String, Double>> columnMap = study.markerDosages.get(constr, mf)
-                                                                                .columnMap();
+          double[][] mkrDosages = study.matchedMarkerDosages.get(constr, mf);
           List<String> foundMetaMarkers = new ArrayList<>();
           for (String marker : markersInOrder) {
             if (mf.metaMarkers.containsKey(marker)) { // may have been dropped by meta HitWindows
@@ -2384,28 +2427,28 @@ public class GeneScorePipeline {
             }
           }
 
-          Set<String> indivs = study.markerDosages.cellSet().stream()
-                                                  .map(e -> e.getValue().rowKeySet())
-                                                  .flatMap(s -> s.stream())
-                                                  .collect(Collectors.toSet());
+          String[][] dataIds = study.data.get(constr, mf).getIds();
           Map<String, double[]> indivAllMkrs = new HashMap<>();
-          for (String ind : indivs) {
-            indivAllMkrs.put(ind, new double[foundMetaMarkers.size()]);
+          for (String[] ind : dataIds) {
+            indivAllMkrs.put(ind[0] + "\t" + ind[1], new double[mkrDosages[0].length]);
           }
 
           List<String> mkrNames = new ArrayList<>();
           for (int indMkr = 0; indMkr < foundMetaMarkers.size(); indMkr++) {
             String marker = foundMetaMarkers.get(indMkr);
             mkrNames.add(marker);
-            final Map<String, Double> indivMap = columnMap.get(marker);
-
-            if (indivMap != null) {
-              for (String ind : indivs) {
-                indivAllMkrs.get(ind)[indMkr] = indivMap.get(ind).doubleValue();
-              }
+            int mkrInd = study.matchedMarkerIndices.get(constr, mf).getOrDefault(marker, -1);
+            if (mkrInd == -1) {
+              // TODO probably log?
+              continue;
+            }
+            Map<String, Double> dosages = new HashMap<>();
+            for (int s = 0; s < ids.length; s++) {
+              dosages.put(ids[s][0] + "\t" + ids[s][1], mkrDosages[s][mkrInd]);
+              indivAllMkrs.get(ids[s][0] + "\t" + ids[s][1])[indMkr] = mkrDosages[s][mkrInd];
             }
 
-            RegressionResult rrResultPerMkr = actualRegression(indivMap, null, pd);
+            RegressionResult rrResultPerMkr = actualRegression(dosages, null, pd);
             study.markerRegressions.get(constr, mf).put(pd, marker, rrResultPerMkr);
           }
 
@@ -2834,11 +2877,13 @@ public class GeneScorePipeline {
                                                                         false))
                                                     .toString();
 
-        Set<String> mkrs = study.markerDosages.cellSet().stream()
-                                              .map(e -> e.getValue().columnKeySet())
-                                              .flatMap(s -> s.stream()).collect(Collectors.toSet());
-        List<String> markersInOrder = ImmutableList.copyOf(Sets.intersection(mkrs,
-                                                                             mf.metaMarkers.keySet()));
+        Set<String> mkrs = study.matchedMarkerIndices.get(constr, mf).keySet();
+        Set<String> intersectMkrs = Sets.intersection(mkrs, mf.metaMarkers.keySet());
+        List<String> markersInOrder = new ArrayList<>(intersectMkrs);
+        final Map<String, Integer> map = study.matchedMarkerIndices.get(constr, mf);
+        markersInOrder.sort((m1, m2) -> {
+          return map.getOrDefault(m1, -1).compareTo(map.getOrDefault(m2, -1));
+        });
 
         for (int i = 0; i < study.phenoFiles.size(); i++) {
           String pheno = study.phenoFiles.get(i);
@@ -2929,12 +2974,20 @@ public class GeneScorePipeline {
           betaWriter.print(rrPheno.getBeta());
           betaWriter.print("\t");
           betaWriter.print(rrPheno.getSe());
+
+          String[][] ids = study.data.get(constr, mf).getIds();
+
           for (String marker : markersInOrder) {
-            if (study.markerDosages.get(constr, mf).columnMap().containsKey(marker)) {
-              RegressionResult rrResult = actualRegression(study.markerDosages.get(constr, mf)
-                                                                              .columnMap()
-                                                                              .get(marker),
-                                                           null, pd);
+            int mkrInd = study.matchedMarkerIndices.get(constr, mf).getOrDefault(marker, -1);
+            if (mkrInd != -1) {
+              Map<String, Double> dosages = new HashMap<>();
+              for (int s = 0; s < ids.length; s++) {
+                dosages.put(ids[s][0] + "\t" + ids[s][1],
+                            study.matchedMarkerDosages.get(constr, mf)[s][mkrInd]);
+              }
+              RegressionResult rrResult = actualRegression(dosages, null, pd);
+              dosages = null;
+
               betaWriter.print("\t");
               betaWriter.print(rrResult.getBeta());
               betaWriter.print("\t");
@@ -2993,8 +3046,8 @@ public class GeneScorePipeline {
     commands.add("write.table(ivw.outliers, \"MR_ivw_outlier_" + pheno
                  + ".txt\", sep=\"\\t\", col.names=T, row.names=F, quote=F)");
 
-    commands.add("RadialMR::plot_radial(c(ivw.radial, egger.radial),T,F,F)");
     commands.add("png(filename='RadialMR.png')");
+    commands.add("RadialMR::plot_radial(c(ivw.radial, egger.radial),T,F,F)");
     commands.add("print(RadialMR)");
     commands.add("dev.off()");
 
