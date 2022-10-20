@@ -73,12 +73,14 @@ import org.pankratzlab.utils.gwas.DosageData.Trio;
 import org.pankratzlab.utils.gwas.windows.HitWindows;
 
 import com.google.common.base.Joiner;
+import com.google.common.base.Predicates;
 import com.google.common.collect.HashBasedTable;
+import com.google.common.collect.HashMultimap;
 import com.google.common.collect.HashMultiset;
 import com.google.common.collect.ImmutableList;
 import com.google.common.collect.ImmutableMultiset;
 import com.google.common.collect.ImmutableSet;
-import com.google.common.collect.Maps;
+import com.google.common.collect.Multimap;
 import com.google.common.collect.Multiset;
 import com.google.common.collect.Sets;
 import com.google.common.collect.Table;
@@ -166,14 +168,14 @@ public class GeneScorePipeline {
     public String metaFile;
     public String metaRoot;
     public Map<String, MetaMarker> metaMarkers;
-    public Map<String, String> markerAliasLookup;
+    public Map<String, String[]> metaMarkerAliasLookup;
     private final int hash;
 
     public MetaFile(String file) {
       this.metaFile = file;
       this.metaRoot = ext.rootOf(file, false);
       this.metaMarkers = new HashMap<>();
-      this.markerAliasLookup = new HashMap<>();
+      this.metaMarkerAliasLookup = new HashMap<>();
       this.hash = Objects.hash(metaFile, metaRoot);
     }
 
@@ -196,7 +198,7 @@ public class GeneScorePipeline {
   static class MetaMarker {
     final String name;
     final double beta, se, pval, freq;
-    final String a1, a2;
+    final Alleles alleles;
 
     public MetaMarker(String name, double beta, double se, double pval, double freq, String a1,
                       String a2) {
@@ -205,9 +207,37 @@ public class GeneScorePipeline {
       this.se = se;
       this.freq = freq;
       this.pval = pval;
+      this.alleles = new Alleles(a1, a2);
+    }
+  }
+
+  static class Alleles {
+
+    final String a1;
+    final String a2;
+
+    public Alleles(String a1, String a2) {
       this.a1 = a1;
       this.a2 = a2;
     }
+
+    @Override
+    public int hashCode() {
+      return Objects.hash(a1, a2);
+    }
+
+    @Override
+    public boolean equals(Object obj) {
+      if (this == obj) {
+        return true;
+      }
+      if (!(obj instanceof Alleles)) {
+        return false;
+      }
+      Alleles other = (Alleles) obj;
+      return Objects.equals(a1, other.a1) && Objects.equals(a2, other.a2);
+    }
+
   }
 
   private final ArrayList<MetaFile> metaFiles = new ArrayList<>();
@@ -271,7 +301,7 @@ public class GeneScorePipeline {
     ArrayList<DataSource> dataSources;
     // dataFile, constraint -> DosageData
     Table<Constraint, MetaFile, DosageData> data = HashBasedTable.create();
-    Table<Constraint, MetaFile, Map<String, Integer>> markerDosageIndices = HashBasedTable.create();
+    Table<Constraint, MetaFile, Table<String, Alleles, Integer>> markerDosageIndices = HashBasedTable.create();
 
     ArrayList<String> phenoFiles = new ArrayList<>();
 
@@ -419,21 +449,25 @@ public class GeneScorePipeline {
     }
 
     /**
-     * Returns a hashSet containing all markers present in the data files that are present in
+     * Returns a Multimap containing all markers present in the data files that are present in
      * hitMkrSet.
      *
      * @param hitMkrSet
      * @return
      */
-    public HashSet<String> retrieveMarkers(MetaFile mf, Constraint constr, Set<String> hitMkrSet) {
-      HashSet<String> returnMarkers = new HashSet<>();
+    public Multimap<String, String[]> retrieveMarkers(MetaFile mf, Constraint constr,
+                                                      Set<String> hitMkrSet) {
+      Multimap<String, String[]> returnMarkers = HashMultimap.create();
       if (data.get(constr, mf).isEmpty()) {
         return returnMarkers;
       }
       String[] mkrs = data.get(constr, mf).getMarkerSet().getMarkerNames();
-      for (String mkr : mkrs) {
+      String[][] alleles = data.get(constr, mf).getMarkerSet().getAlleles();
+      for (int i = 0; i < mkrs.length; i++) {
+        String mkr = mkrs[i];
+        String[] mkrAlleles = alleles[i];
         if (hitMkrSet.contains(mkr)) {
-          returnMarkers.add(mkr);
+          returnMarkers.put(mkr, mkrAlleles);
         }
       }
       return returnMarkers;
@@ -1521,8 +1555,10 @@ public class GeneScorePipeline {
       String metaFile = mf.metaFile;
       String fullPath = metaDir + metaFile;
 
-      Map<String, int[]> hitMkrLocations = new HashMap<>();
-      Map<String, String> mkrAliasLookup = new HashMap<>();
+      // we expect no duplicate marker names in meta file!
+      Map<String, Alleles> metaHitMkrAlleles = new HashMap<>();
+      Map<String, int[]> metaHitMkrLocations = new HashMap<>();
+      Map<String, String[]> mkrAliasLookup = new HashMap<>();
       for (Constraint constr : analysisConstraints) {
         FileColumn<String> mkrColumn = StandardFileColumns.snp("mkr");
         FileColumn<Byte> chrColumn = StandardFileColumns.chr("chr");
@@ -1531,51 +1567,54 @@ public class GeneScorePipeline {
         FileColumn<String> a2Column = StandardFileColumns.a2("a2");
 
         try {
-          Map<String, DataLine> data = FileParserFactory.setup(fullPath, mkrColumn, chrColumn,
-                                                               posColumn)
-                                                        .optionalColumns(a1Column, a2Column).build()
-                                                        .load(false, mkrColumn);
-          hitMkrLocations = new HashMap<>(Maps.transformValues(data,
-                                                               d -> new int[] {d.get(chrColumn,
-                                                                                     (byte) -1),
-                                                                               d.get(posColumn,
-                                                                                     -1)}));
-          mkrAliasLookup = Maps.transformValues(data,
-                                                d -> "chr" + d.get(chrColumn, (byte) -1) + ":"
-                                                     + d.get(posColumn, -1)
-                                                     + (d.has(a1Column) ? (":" + d.get(a1Column, "")
-                                                                           + ":"
-                                                                           + d.get(a2Column, ""))
-                                                                        : ""))
-                               .entrySet().stream()
-                               .collect(Collectors.toMap(Map.Entry::getValue, Map.Entry::getKey));
-          mkrAliasLookup.putAll(Maps.transformValues(data,
-                                                     d -> "chr" + d.get(chrColumn, (byte) -1) + ":"
-                                                          + d.get(posColumn, -1)
-                                                          + (d.has(a1Column) ? (":"
-                                                                                + d.get(a2Column,
-                                                                                        "")
-                                                                                + ":"
-                                                                                + d.get(a1Column,
-                                                                                        ""))
-                                                                             : ""))
-                                    .entrySet().stream()
-                                    .collect(Collectors.toMap(Map.Entry::getValue,
-                                                              Map.Entry::getKey)));
-          mf.markerAliasLookup = mkrAliasLookup;
+          Map<ImmutableList<Object>, DataLine> data = FileParserFactory.setup(fullPath, mkrColumn,
+                                                                              chrColumn, posColumn,
+                                                                              a1Column, a2Column)
+                                                                       .build()
+                                                                       .load(false, mkrColumn,
+                                                                             a1Column, a2Column);
+          data.entrySet().stream().forEach(e -> {
+            String mkr = e.getValue().get(mkrColumn, null);
+            String a1 = e.getValue().get(a1Column, null);
+            String a2 = e.getValue().get(a2Column, null);
+            if (mkr == null || a1 == null || a2 == null) return;
+            int[] chrPos = new int[] {e.getValue().get(chrColumn, (byte) -1),
+                                      e.getValue().get(posColumn, -1)};
+            metaHitMkrAlleles.put(mkr, new Alleles(a1, a2));
+            metaHitMkrLocations.put(mkr, chrPos);
+            String alias1 = "chr" + e.getValue().get(chrColumn, (byte) -1) + ":"
+                            + e.getValue().get(posColumn, -1)
+                            + (e.getValue().has(a1Column)
+                                                          ? (":" + e.getValue().get(a1Column, "")
+                                                             + ":" + e.getValue().get(a2Column, ""))
+                                                          : "");
+            String alias2 = "chr" + e.getValue().get(chrColumn, (byte) -1) + ":"
+                            + e.getValue().get(posColumn, -1)
+                            + (e.getValue().has(a1Column)
+                                                          ? (":" + e.getValue().get(a2Column, "")
+                                                             + ":" + e.getValue().get(a1Column, ""))
+                                                          : "");
+            mkrAliasLookup.put(alias1, new String[] {mkr, a1, a2});
+            mkrAliasLookup.put(alias2, new String[] {mkr, a1, a2});
+          });
+          mf.metaMarkerAliasLookup = mkrAliasLookup;
         } catch (IOException e) {
           log.reportIOException(fullPath);
         }
 
-        if (hitMkrLocations.isEmpty()) {
+        if (metaHitMkrLocations.isEmpty()) {
           log.reportError(".meta file was empty for " + metaFile);
         } else {
-          log.report("Using all " + hitMkrLocations.size() + " SNPs in .meta file " + mf.metaRoot);
+          log.report("Using all " + metaHitMkrLocations.size() + " SNPs in .meta file "
+                     + mf.metaRoot);
         }
 
         int metaCount = Files.countLines(fullPath, 0);
 
         if (metaCount > 1000 && runMetaHW) {
+          log.report("Found more than " + 1000 + " SNPs in meta file " + metaFile
+                     + "; running HitWindows to trim...");
+          metaHitMkrLocations.clear();
           String[][] results = HitWindows.determine(fullPath, constr.indexThreshold,
                                                     constr.windowMinSizePerSide,
                                                     constr.windowExtensionThreshold,
@@ -1587,11 +1626,11 @@ public class GeneScorePipeline {
             for (int i = 1; i < results.length; i++) {
               String[] result = results[i];
               try {
-                hitMkrLocations.put(result[1], new int[] {Integer.parseInt(result[2]),
-                                                          Integer.parseInt(result[3])});
+                metaHitMkrLocations.put(result[1], new int[] {Integer.parseInt(result[2]),
+                                                              Integer.parseInt(result[3])});
               } catch (NumberFormatException nfe) {
                 log.reportError("Failed to parse position for result " + ArrayUtils.toStr(result));
-                hitMkrLocations.put(result[1], new int[] {-1, -1});
+                metaHitMkrLocations.put(result[1], new int[] {-1, -1});
               }
             }
           }
@@ -1599,53 +1638,72 @@ public class GeneScorePipeline {
 
         // uncomment to use all markers in dataFile
 
-        if (!hitMkrLocations.isEmpty()) {
+        if (!metaHitMkrLocations.isEmpty()) {
           // read betas and freqs for hitwindow markers
-          HashMap<String, MetaMarker> dataMarkers = new HashMap<>();
-          Set<String> mkrs = new HashSet<>(hitMkrLocations.keySet());
+          HashMap<String, MetaMarker> metaDataMarkers = new HashMap<>();
+          Set<String> mkrs = new HashSet<>(metaHitMkrLocations.keySet());
           for (String hitMkr : mkrs) {
             if (mf.metaMarkers.containsKey(hitMkr)) {
               MetaMarker mm = mf.metaMarkers.get(hitMkr);
               if (!Double.isNaN(mm.beta) && !Double.isNaN(mm.freq) && !Double.isNaN(mm.pval)) {
-                dataMarkers.put(hitMkr, mm);
+                metaDataMarkers.put(hitMkr, mm);
               } else {
-                hitMkrLocations.remove(hitMkr);
+                metaHitMkrLocations.remove(hitMkr);
               }
             } else {
-              hitMkrLocations.remove(hitMkr);
+              metaHitMkrLocations.remove(hitMkr);
             }
           }
 
-          double dataScore1 = getBetaFreqScore(dataMarkers);
-          double dataScore2 = getChiDistRevScore(dataMarkers);
+          double dataScore1 = getBetaFreqScore(metaDataMarkers);
+          double dataScore2 = getChiDistRevScore(metaDataMarkers);
 
           // cross-ref PLINK markers
           for (Study study : studies) {
-            study.loadDataSources(mf, constr, hitMkrLocations);
+            // data sources MAY have duplicate markers!
+            study.loadDataSources(mf, constr, metaHitMkrLocations);
 
-            HashMap<String, MetaMarker> bimSubsetMarkers = new HashMap<>();
+            HashMap<String, MetaMarker> metaMarkerInDataSubset = new HashMap<>();
             Set<String> markerNames = new HashSet<>();
-            markerNames.addAll(hitMkrLocations.keySet());
+            markerNames.addAll(metaHitMkrLocations.keySet());
             markerNames.addAll(study.data.values().stream().map(d -> d.getMarkerSet())
                                          .flatMap(sms -> Arrays.stream(sms.getMarkerNames()))
                                          .collect(Collectors.toSet()));
-            HashSet<String> bimMkrSet = study.retrieveMarkers(mf, constr, markerNames);
+            Multimap<String, String[]> bimMkrSet = study.retrieveMarkers(mf, constr, markerNames);
 
             // pull betas and freqs for union markers
-            for (String mkr : bimMkrSet) {
-              if (hitMkrLocations.containsKey(mkr)) {
-                bimSubsetMarkers.put(mkr, dataMarkers.get(mkr));
-              } else if (mf.markerAliasLookup.containsKey(mkr)) {
-                bimSubsetMarkers.put(mf.markerAliasLookup.get(mkr),
-                                     dataMarkers.get(mf.markerAliasLookup.get(mkr)));
-              } else {
-                log.reportWarning("Couldn't find marker " + mkr + " in marker locations.");
+            bimMkrSet.entries().stream().filter(Predicates.or(e -> {
+              // filter on marker names
+              return metaHitMkrLocations.containsKey(e.getKey())
+                     || mf.metaMarkerAliasLookup.containsKey(e.getKey());
+            }, e -> {
+              // filter on marker alleles
+              String[] dataAlleles = e.getValue();
+
+              Alleles metaAlleles = metaHitMkrAlleles.get(e.getKey());
+              if (metaAlleles == null) {
+                metaAlleles = metaHitMkrAlleles.get(mf.metaMarkerAliasLookup.get(e.getKey())[0]);
               }
-            }
+              if (metaAlleles == null) return false;
+
+              return (dataAlleles[0].equalsIgnoreCase(metaAlleles.a1)
+                      && dataAlleles[1].equalsIgnoreCase(metaAlleles.a2))
+                     || (dataAlleles[0].equalsIgnoreCase(metaAlleles.a2)
+                         && dataAlleles[1].equalsIgnoreCase(metaAlleles.a1));
+            })).forEach(e -> {
+              String dataMkr = e.getKey();
+
+              if (!metaHitMkrLocations.containsKey(dataMkr)) {
+                dataMkr = mf.metaMarkerAliasLookup.get(dataMkr)[0];
+              }
+
+              // because of the filter() above, we know metaAlleles is valid here
+              metaMarkerInDataSubset.put(dataMkr, metaDataMarkers.get(dataMkr));
+            });
 
             // apply equation and set value for overall results
-            double bimScore1 = getBetaFreqScore(bimSubsetMarkers);
-            double bimScore2 = getChiDistRevScore(bimSubsetMarkers);
+            double bimScore1 = getBetaFreqScore(metaMarkerInDataSubset);
+            double bimScore2 = getChiDistRevScore(metaMarkerInDataSubset);
 
             study.scores.put(constr, mf,
                              new double[] {bimScore1 / dataScore1, bimScore2 / dataScore2});
@@ -1889,11 +1947,11 @@ public class GeneScorePipeline {
           String a2 = (alleles[i][1]).toUpperCase();
           boolean validAlleles = (Sequence.validAllele(a1) && Sequence.validAllele(a2));
           if (validAlleles) {
-            mkrsMeta.put(mf.markerAliasLookup.containsKey(mkrNames[i]) ? mf.markerAliasLookup.get(mkrNames[i])
-                                                                       : mkrNames[i],
+            mkrsMeta.put(mf.metaMarkerAliasLookup.containsKey(mkrNames[i]) ? mf.metaMarkerAliasLookup.get(mkrNames[i])[0]
+                                                                           : mkrNames[i],
                          new GenomicPosition((byte) chrPos[i][0], chrPos[i][1]));
-            mkrAlleles.put(mf.markerAliasLookup.containsKey(mkrNames[i]) ? mf.markerAliasLookup.get(mkrNames[i])
-                                                                         : mkrNames[i],
+            mkrAlleles.put(mf.metaMarkerAliasLookup.containsKey(mkrNames[i]) ? mf.metaMarkerAliasLookup.get(mkrNames[i])[0]
+                                                                             : mkrNames[i],
                            new String[] {a1, a2});
             if (a1.equals(Sequence.flip(a2))) {
               ambig.add(i);
@@ -1987,8 +2045,8 @@ public class GeneScorePipeline {
           public boolean filter(DataLine values) {
             String mkr = values.get(markerCol, null);
             return mkrsMeta.containsKey(mkr)
-                   || (mf.markerAliasLookup.containsKey(mkr)
-                       && mkrsMeta.containsKey(mf.markerAliasLookup.get(mkr)));
+                   || (mf.metaMarkerAliasLookup.containsKey(mkr)
+                       && mkrsMeta.containsKey(mf.metaMarkerAliasLookup.get(mkr)[0]));
           }
         };
         final ColumnFilter mkrsAlleleFilter = new AbstractColumnFilter(markerCol, a1Column,
@@ -2200,6 +2258,9 @@ public class GeneScorePipeline {
           continue;
         }
 
+        // this data has been filtered already to remove duplicate markers
+        // therefore it is safe to key on marker name
+        // however we still have to match up against data alleles
         Map<String, HitMarker> hitMarkerData = study.markerData.get(constr, mf);
 
         String[][] ids = data.getIds();
@@ -2219,27 +2280,38 @@ public class GeneScorePipeline {
         String[] markers = data.getMarkerSet().getMarkerNames();
         String[][] alleles = data.getMarkerSet().getAlleles();
 
-        study.markerDosageIndices.put(constr, mf, new HashMap<>());
+        study.markerDosageIndices.put(constr, mf, HashBasedTable.create());
         study.matchedMarkerIndices.put(constr, mf, new HashMap<>());
-        Map<String, Integer> markerDosageIndices = study.markerDosageIndices.get(constr, mf);
+        Table<String, Alleles, Integer> markerDosageIndices = study.markerDosageIndices.get(constr,
+                                                                                            mf);
         Map<String, Integer> matchedMarkerIndices = study.matchedMarkerIndices.get(constr, mf);
 
         Map<String, Float> matchedMarkerFreqs = new HashMap<>();
+        Map<String, Alleles> matchedMarkerAlleles = new HashMap<>();
         Map<String, AlleleOrder> matchedMarkerAlleleOrders = new HashMap<>();
 
         int index = 0;
         for (int m = 0; m < markers.length; m++) {
           String mkr = markers[m];
-          markerDosageIndices.put(mkr, m);
+          String[] dataAlleles = alleles[m];
+          Alleles dataAlleleObj = new Alleles(dataAlleles[0], dataAlleles[1]);
+          markerDosageIndices.put(mkr, dataAlleleObj, m);
           HitMarker hitMarker = hitMarkerData.get(mkr);
           if (hitMarker == null) {
-            if (mf.markerAliasLookup.containsKey(mkr)) {
-              hitMarker = hitMarkerData.get(mf.markerAliasLookup.get(mkr));
+            if (mf.metaMarkerAliasLookup.containsKey(mkr)) {
+              hitMarker = hitMarkerData.get(mf.metaMarkerAliasLookup.get(mkr)[0]);
             }
             if (hitMarker == null) {
               log.report("No HitMarker data available for " + mkr);
               continue;
             }
+          }
+          boolean allelesMatch = (hitMarker.effectAllele.equalsIgnoreCase(dataAlleles[0])
+                                  && hitMarker.nonEffectAllele.equalsIgnoreCase(dataAlleles[1]))
+                                 || (hitMarker.effectAllele.equalsIgnoreCase(dataAlleles[1])
+                                     && hitMarker.nonEffectAllele.equalsIgnoreCase(dataAlleles[0]));
+          if (!allelesMatch) {
+            continue;
           }
           CONFIG config = determineAlleleConfig(alleles[m], hitMarker);
           AlleleOrder alleleOrder = config.getAlleleOrder();
@@ -2261,6 +2333,7 @@ public class GeneScorePipeline {
           }
           matchedMarkerAlleleOrders.put(mkr, alleleOrder);
           matchedMarkerIndices.put(mkr, index++);
+          matchedMarkerAlleles.put(mkr, dataAlleleObj);
           int cnt = 0;
           float tot = 0;
           for (int i = 0; i < ids.length; i++) {
@@ -2292,7 +2365,8 @@ public class GeneScorePipeline {
 
           for (Map.Entry<String, Integer> mkrIndexEntry : matchedMarkerIndices.entrySet()) {
             String mkr = mkrIndexEntry.getKey();
-            int mkrDosageIndex = markerDosageIndices.get(mkr);
+            Alleles mkrAlleles = matchedMarkerAlleles.get(mkr);
+            int mkrDosageIndex = markerDosageIndices.get(mkr, mkrAlleles);
             int mkrMatchedIndex = mkrIndexEntry.getValue();
             float dosage = dose[mkrDosageIndex][i];
             double mkrDose = Double.NaN;
@@ -2303,8 +2377,8 @@ public class GeneScorePipeline {
 
             HitMarker hitMarker = hitMarkerData.get(mkr);
             if (hitMarker == null) {
-              if (mf.markerAliasLookup.containsKey(mkr)) {
-                mkr = mf.markerAliasLookup.get(mkr);
+              if (mf.metaMarkerAliasLookup.containsKey(mkr)) {
+                mkr = mf.metaMarkerAliasLookup.get(mkr)[0];
                 hitMarker = hitMarkerData.get(mkr);
               }
               if (hitMarker == null) {
@@ -2332,8 +2406,6 @@ public class GeneScorePipeline {
               throw new IllegalStateException("Mismatched alleles were not caught when cross-filtering");
             }
             scoreSum += mkrScr;
-            // scoreTable.put(ids[i][0] + "\t" + ids[i][1], mkr, mkrScr);
-            // dosageTable.put(ids[i][0] + "\t" + ids[i][1], mkr, mkrDose);
 
             markerScores[i][mkrMatchedIndex] = mkrScr;
             markerDosages[i][mkrMatchedIndex] = mkrDose;
@@ -2930,14 +3002,16 @@ public class GeneScorePipeline {
                 markerWriter.println(resultPrefix + "\t" + pheno + "\t" + marker + "\t" + metaBeta
                                      + "\t" + metaSE + "\t" + markerBeta + "\t" + markerSE);
 
-                twoSampleExposure.println(marker + "\t" + metaMarker.a1 + "\t" + metaMarker.a2
-                                          + "\t" + metaMarker.freq + "\t" + metaBeta + "\t" + metaSE
-                                          + "\t" + metaMarker.pval + "\tExposure");
+                twoSampleExposure.println(marker + "\t" + metaMarker.alleles.a1 + "\t"
+                                          + metaMarker.alleles.a2 + "\t" + metaMarker.freq + "\t"
+                                          + metaBeta + "\t" + metaSE + "\t" + metaMarker.pval
+                                          + "\tExposure");
 
                 String FREQ = ".";
-                twoSampleOutcome.println(marker + "\t" + metaMarker.a1 + "\t" + metaMarker.a2 + "\t"
-                                         + FREQ + "\t" + markerBeta + "\t" + markerSE + "\t"
-                                         + rrResult.getPval() + "\tOutcome");
+                twoSampleOutcome.println(marker + "\t" + metaMarker.alleles.a1 + "\t"
+                                         + metaMarker.alleles.a2 + "\t" + FREQ + "\t" + markerBeta
+                                         + "\t" + markerSE + "\t" + rrResult.getPval()
+                                         + "\tOutcome");
               }
             }
           }
