@@ -15,6 +15,7 @@ import java.util.Hashtable;
 import java.util.LinkedHashSet;
 import java.util.List;
 import java.util.Map;
+import java.util.Map.Entry;
 import java.util.Objects;
 import java.util.Optional;
 import java.util.Set;
@@ -114,6 +115,7 @@ public class GeneScorePipeline {
   private static final String CROSS_FILTERED_DATAFILE = "bimData.xln";
   private static final String DATA_SOURCE_FILENAME = "data.txt";
   private static final String META_DIRECTORY = "meta_results";
+  private static final String META_ANALYSIS_DEFINITIONS_FILE = "meta.analysis";
 
   private static final String MARKER_COL_NAME = "Marker";
   private static final String EFFECT_ALLELE_COL_NAME = "EffectAllele";
@@ -130,7 +132,8 @@ public class GeneScorePipeline {
                                                                         .add("P-VALUE")
                                                                         .add("EXCEL-SIG")
                                                                         .add("BETA").add("SE")
-                                                                        .add("NUM").add("CASES")
+                                                                        .add("DIRECTION").add("NUM")
+                                                                        .add("CASES")
                                                                         .add("CONTROLS")
                                                                         .add("PAIRED-T-P-VALUE")
                                                                         .add("WILCOXON-SIGNED-RANK-P-VALUE")
@@ -247,6 +250,8 @@ public class GeneScorePipeline {
   private final List<String> covarOrder = new ArrayList<>();
   private final List<Constraint> analysisConstraints = new ArrayList<>();
   private final HashMap<String, HashMap<String, Integer>> dataCounts = new HashMap<>();
+  private final List<MetaAnalysis> metaAnalyses = new ArrayList<>();
+  private final Table<Constraint, MetaFile, Map<MetaAnalysis, MetaAnalysisSummary>> summaryResults = HashBasedTable.create();
 
   // private int bimChrIndex = 0;
   // private int bimMkrIndex = 1;
@@ -1263,12 +1268,12 @@ public class GeneScorePipeline {
     }
   }
 
-  public GeneScorePipeline(String metaDir, float[] indexThresholds, int[] windowMins,
+  public GeneScorePipeline(String workDir, float[] indexThresholds, int[] windowMins,
                            float[] windowExtThresholds, double missThresh, boolean runMetaHW,
                            String rLibsDir, boolean plotOddsRatio, GenomeBuild build, Logger log) {
     this.log = log;
     this.build = build;
-    this.metaDir = ext.verifyDirFormat(metaDir);
+    this.metaDir = ext.verifyDirFormat(workDir);
     this.runMetaHW = runMetaHW;
     this.rLibsDir = rLibsDir;
     this.plotOddsRatio = plotOddsRatio;
@@ -1295,6 +1300,7 @@ public class GeneScorePipeline {
     loadDataCounts();
     loadCovarData();
     loadMetaFileData();
+    loadMetaAnalysisFile();
     runMetaHitWindowsAndLoadData();
   }
 
@@ -1548,6 +1554,121 @@ public class GeneScorePipeline {
       }
     }
 
+  }
+
+  private static class MetaAnalysisEntry {
+    Study study;
+    String phenoFile;
+
+    public MetaAnalysisEntry(Study study, String phenoFile) {
+      this.study = study;
+      this.phenoFile = phenoFile;
+    }
+
+  }
+
+  private static class MetaAnalysis {
+    String name;
+    List<MetaAnalysisEntry> entries;
+
+    public MetaAnalysis() {
+      this.entries = new ArrayList<>();
+    }
+
+    public void addEntry(String name, Study stud, String phen) {
+      this.name = name;
+      entries.add(new MetaAnalysisEntry(stud, phen));
+    }
+
+    @Override
+    public int hashCode() {
+      return Objects.hash(name);
+    }
+
+    @Override
+    public boolean equals(Object obj) {
+      if (this == obj) {
+        return true;
+      }
+      if (!(obj instanceof MetaAnalysis)) {
+        return false;
+      }
+      MetaAnalysis other = (MetaAnalysis) obj;
+      return Objects.equals(name, other.name);
+    }
+
+  }
+
+  private void loadMetaAnalysisFile() {
+    if (!Files.exists(metaDir + META_ANALYSIS_DEFINITIONS_FILE)) {
+      // TODO log
+      return;
+    }
+    String[] metaAnalysisDefs = HashVec.loadFileToStringArray(metaDir
+                                                              + META_ANALYSIS_DEFINITIONS_FILE,
+                                                              false, null, false);
+
+    for (String def : metaAnalysisDefs) {
+      MetaAnalysis ma = new MetaAnalysis();
+      String[] studDef = def.split("\t");
+      if (studDef.length == 0) {
+        continue;
+      } else if (studDef.length == 1) {
+        // TODO log - cannot meta-analyze with only one study!
+        continue;
+      }
+      String name = studDef[0];
+      for (int i = 1; i < studDef.length; i++) {
+        String s = studDef[i];
+        String[] studPhen = s.split("\\|");
+        if (studPhen.length != 2) {
+          // TODO report malformed study entry
+          continue;
+        }
+        String stud = studPhen[0];
+        String phen = studPhen[1];
+
+        List<Study> match = studies.stream().filter(st -> st.studyName.equalsIgnoreCase(stud))
+                                   .collect(Collectors.toList());
+        if (match.size() > 1) {
+          // TODO log malformed
+          continue;
+        } else if (match.size() == 0) {
+          // TODO log not found study name
+          continue;
+        }
+
+        Study matchStudy = match.get(0);
+
+        List<String> matchPheno = matchStudy.phenoFiles.stream().filter(pde -> {
+          return pde.equalsIgnoreCase(phen) || pde.equalsIgnoreCase(phen + ".pheno");
+        }).collect(Collectors.toList());
+
+        if (matchPheno.size() > 1) {
+          // TODO log malformed
+          continue;
+        } else if (matchPheno.size() == 0) {
+          // TODO log not found study name
+          continue;
+        }
+
+        ma.addEntry(name, matchStudy, matchPheno.get(0));
+      }
+      if (ma.entries.size() <= 1) {
+        // TODO log malformed
+        continue;
+      }
+
+      metaAnalyses.add(ma);
+    }
+
+    for (MetaFile mf : metaFiles) {
+      for (Constraint constr : analysisConstraints) {
+        summaryResults.put(constr, mf, new HashMap<>());
+      }
+    }
+
+    // TODO log entries found
   }
 
   private void runMetaHitWindowsAndLoadData() {
@@ -1881,6 +2002,7 @@ public class GeneScorePipeline {
       loadPhenoFiles(study);
       processStudy(study);
     }
+    processMetaAnalyses();
     writeResults();
     writeAndRunMR();
     log.report("Processing Complete!");
@@ -2771,8 +2893,6 @@ public class GeneScorePipeline {
       rr.setLogistic(model.isLogistic());
     } else {
       int ind = -1;
-      log.report("Found " + model.getVarNames().length + " variables for regression ("
-                 + ArrayUtils.toStr(model.getVarNames(), ",") + ")");
       for (int l = 0; l < model.getVarNames().length; l++) {
         if ("Indep 1".equals(model.getVarNames()[l])) {
           ind = l;
@@ -2799,6 +2919,217 @@ public class GeneScorePipeline {
     }
     RegressionResult rrResult = rr.build();
     return rrResult;
+  }
+
+  private static class MetaAnalysisResult {
+    final double beta;
+    final double se;
+    final double pval;
+    final String direction;
+    final int num;
+    final int cases;
+    final int controls;
+
+    public MetaAnalysisResult(double beta, double se, double pval, String direction, int num,
+                              int cases, int controls) {
+      this.beta = beta;
+      this.se = se;
+      this.pval = pval;
+      this.direction = direction;
+      this.num = num;
+      this.cases = cases;
+      this.controls = controls;
+    }
+
+    @Override
+    public String toString() {
+      return new StringBuilder().append(beta).append("\t").append(se).append("\t").append(pval)
+                                .append("\t").append(direction).append("\t").append(num)
+                                .append("\t").append(cases).append("\t").append(controls)
+                                .toString();
+    }
+
+  }
+
+  private static class MetaAnalysisSummary {
+    MetaAnalysisResult prsResult;
+    Map<String, MetaAnalysisResult> perMarkerResultsUni;
+    Map<String, MetaAnalysisResult> perMarkerResultsMulti;
+
+    public MetaAnalysisSummary() {
+      perMarkerResultsUni = new HashMap<>();
+      perMarkerResultsMulti = new HashMap<>();
+    }
+  }
+
+  private void processMetaAnalyses() {
+
+    // create directory structure
+    new File(metaDir + "/" + META_DIRECTORY).mkdir();
+    for (MetaFile mf : metaFiles) {
+      String dataFolder = metaDir + "/" + META_DIRECTORY + "/" + mf.metaRoot + "/";
+      for (Constraint constr : analysisConstraints) {
+        String constraintFolder = dataFolder + constr.analysisString + "/";
+        for (MetaAnalysis ma : metaAnalyses) {
+          String metaFolder = constraintFolder + ma.name + "/";
+          File f = new File(metaFolder);
+          if (!(f.exists())) {
+            f.mkdirs();
+          }
+        }
+      }
+    }
+
+    for (MetaAnalysis ma : metaAnalyses) {
+
+      for (MetaFile mf : metaFiles) {
+
+        for (Constraint constr : analysisConstraints) {
+
+          PrintWriter writer = Files.getAppropriateWriter(metaDir + "/" + META_DIRECTORY + "/"
+                                                          + ma.name + "_" + mf.metaRoot + "_"
+                                                          + constr.analysisString + "_InvVar.out");
+          writer.println("SUBTYPE\tVARIATE\tBETA\tSE\tPVAL\tNUM\tCASES\tCONTROLS");
+
+          final StringBuilder prsDir = new StringBuilder();
+          final List<double[]> prsBS = new ArrayList<>();
+
+          final Set<String> allMarkerNamesSet = new HashSet<>();
+
+          ma.entries.forEach(mae -> {
+            Study study = mae.study;
+            PhenoData pd = mae.study.phenoData.get(mae.phenoFile);
+
+            allMarkerNamesSet.addAll(study.markerRegressions.get(constr, mf).row(pd).keySet());
+          });
+
+          final List<String> allMarkerNames = new ArrayList<>(allMarkerNamesSet);
+          allMarkerNames.sort(Comparator.naturalOrder());
+
+          int prsCount = 0;
+          int prsCase = 0;
+          int prsCtrl = 0;
+          final Map<String, List<double[]>> perMarkerBS = new HashMap<>();
+          final Map<String, List<double[]>> perMarkerMultivarBS = new HashMap<>();
+          final Map<String, int[]> perMarkerSums = new HashMap<>();
+          final Map<String, int[]> perMarkerMultivarSums = new HashMap<>();
+          final Map<String, StringBuilder> perMarkerUniDirections = new HashMap<>();
+          final Map<String, StringBuilder> perMarkerMultiDirections = new HashMap<>();
+
+          for (String mkr : allMarkerNames) {
+            perMarkerBS.put(mkr, new ArrayList<>());
+            perMarkerMultivarBS.put(mkr, new ArrayList<>());
+            perMarkerSums.put(mkr, new int[] {0, 0, 0});
+            perMarkerMultivarSums.put(mkr, new int[] {0, 0, 0});
+            perMarkerUniDirections.put(mkr, new StringBuilder());
+            perMarkerMultiDirections.put(mkr, new StringBuilder());
+          }
+
+          for (MetaAnalysisEntry mae : ma.entries) {
+            Study study = mae.study;
+            PhenoData pd = mae.study.phenoData.get(mae.phenoFile);
+
+            RegressionResult rr;
+            rr = study.regressions.get(constr, mf).get(pd);
+            prsBS.add(new double[] {rr.getBeta(), rr.getSe()});
+            prsDir.append(getDirection(rr.getBeta()));
+            prsCount += rr.getNum();
+            prsCase += rr.getnCases();
+            prsCtrl += rr.getnControls();
+
+            Map<String, RegressionResult> mkrRegsUni = study.markerRegressions.get(constr, mf)
+                                                                              .row(pd);
+            Map<String, RegressionResult> mkrRegsMulti = study.multivarRegressions.get(constr, mf)
+                                                                                  .row(pd);
+
+            for (String mkr : allMarkerNames) {
+              if (!mkrRegsUni.containsKey(mkr)) {
+                perMarkerUniDirections.get(mkr).append(".");
+              } else {
+                perMarkerUniDirections.get(mkr).append(getDirection(mkrRegsUni.get(mkr).getBeta()));
+                perMarkerBS.get(mkr).add(new double[] {mkrRegsUni.get(mkr).getBeta(),
+                                                       mkrRegsUni.get(mkr).getSe()});
+                perMarkerSums.get(mkr)[0] = perMarkerSums.get(mkr)[0]
+                                            + mkrRegsUni.get(mkr).getNum();
+                perMarkerSums.get(mkr)[1] = perMarkerSums.get(mkr)[1]
+                                            + mkrRegsUni.get(mkr).getnCases();
+                perMarkerSums.get(mkr)[2] = perMarkerSums.get(mkr)[2]
+                                            + mkrRegsUni.get(mkr).getnControls();
+              }
+              if (!mkrRegsMulti.containsKey(mkr)) {
+                perMarkerMultiDirections.get(mkr).append(".");
+              } else {
+                perMarkerMultiDirections.get(mkr)
+                                        .append(getDirection(mkrRegsMulti.get(mkr).getBeta()));
+                perMarkerMultivarBS.get(mkr).add(new double[] {mkrRegsMulti.get(mkr).getBeta(),
+                                                               mkrRegsMulti.get(mkr).getSe()});
+                perMarkerMultivarSums.get(mkr)[0] = perMarkerMultivarSums.get(mkr)[0]
+                                                    + mkrRegsMulti.get(mkr).getNum();
+                perMarkerMultivarSums.get(mkr)[1] = perMarkerMultivarSums.get(mkr)[1]
+                                                    + mkrRegsMulti.get(mkr).getnCases();
+                perMarkerMultivarSums.get(mkr)[2] = perMarkerMultivarSums.get(mkr)[2]
+                                                    + mkrRegsMulti.get(mkr).getnControls();
+              }
+            }
+          }
+
+          MetaAnalysisSummary summary = new MetaAnalysisSummary();
+
+          // Meta-analyze each snp across studies
+          double[] data = org.pankratzlab.utils.gwas.MetaAnalysis.inverseVarianceWeighting(prsBS.toArray(new double[0][]),
+                                                                                           log);
+          double pval = computePVal(data[0], data[1], prsCount);
+
+          summary.prsResult = new MetaAnalysisResult(data[0], data[1], pval, prsDir.toString(),
+                                                     prsCount, prsCase, prsCtrl);
+
+          writer.println("PRS\tPRS\t" + summary.prsResult.toString());
+
+          for (Entry<String, List<double[]>> cell : perMarkerBS.entrySet()) {
+            double[] mkrData = org.pankratzlab.utils.gwas.MetaAnalysis.inverseVarianceWeighting(cell.getValue()
+                                                                                                    .toArray(new double[0][]),
+                                                                                                log);
+            double mkrPval = computePVal(mkrData[0], mkrData[1],
+                                         perMarkerSums.get(cell.getKey())[0]);
+            MetaAnalysisResult mar = new MetaAnalysisResult(mkrData[0], mkrData[1], mkrPval,
+                                                            perMarkerUniDirections.get(cell.getKey())
+                                                                                  .toString(),
+                                                            perMarkerSums.get(cell.getKey())[0],
+                                                            perMarkerSums.get(cell.getKey())[1],
+                                                            perMarkerSums.get(cell.getKey())[2]);
+            summary.perMarkerResultsUni.put(cell.getKey(), mar);
+            writer.println(cell.getKey() + "\tUNIVARIATE\t" + mar.toString());
+          }
+          for (Entry<String, List<double[]>> cell : perMarkerMultivarBS.entrySet()) {
+            double[] mkrData = org.pankratzlab.utils.gwas.MetaAnalysis.inverseVarianceWeighting(cell.getValue()
+                                                                                                    .toArray(new double[0][]),
+                                                                                                log);
+            double mkrPval = computePVal(mkrData[0], mkrData[1],
+                                         perMarkerMultivarSums.get(cell.getKey())[0]);
+            MetaAnalysisResult mar = new MetaAnalysisResult(mkrData[0], mkrData[1], mkrPval,
+                                                            perMarkerMultiDirections.get(cell.getKey())
+                                                                                    .toString(),
+                                                            perMarkerMultivarSums.get(cell.getKey())[0],
+                                                            perMarkerMultivarSums.get(cell.getKey())[1],
+                                                            perMarkerMultivarSums.get(cell.getKey())[2]);
+            summary.perMarkerResultsMulti.put(cell.getKey(), mar);
+            writer.println(cell.getKey() + "\tMULTIVARIATE\t" + mar.toString());
+          }
+
+          writer.close();
+
+          summaryResults.get(constr, mf).put(ma, summary);
+        }
+      }
+    }
+  }
+
+  private double computePVal(double beta, double se, double n) {
+    return ProbDist.NormDist(Math.abs(beta / se));
+  }
+
+  private String getExcelPVal(double beta, double se) {
+    return "=(1-(NORM.S.DIST(ABS(" + beta + "/" + se + "),TRUE)))*2";
   }
 
   private void writeResults() {
@@ -2889,7 +3220,58 @@ public class GeneScorePipeline {
           }
         }
       }
+
+      for (MetaAnalysis ma : metaAnalyses) {
+        for (MetaFile mf : metaFiles) {
+          String dataFile = mf.metaRoot;
+          for (Constraint constr : analysisConstraints) {
+            MetaAnalysisSummary summary = summaryResults.get(constr, mf).get(ma);
+
+            final MetaAnalysisResult result = summary.prsResult;
+
+            String linStr = formResultLine(ma, dataFile, constr, result, "PRS");
+
+            writer.println(linStr);
+
+            for (Entry<String, MetaAnalysisResult> res : summary.perMarkerResultsUni.entrySet()) {
+              writer.println(formResultLine(ma, dataFile, constr, res.getValue(), res.getKey()));
+            }
+
+            for (Entry<String, MetaAnalysisResult> res : summary.perMarkerResultsMulti.entrySet()) {
+              writer.println(formResultLine(ma, dataFile, constr, res.getValue(), res.getKey()));
+            }
+
+          }
+        }
+      }
     }
+  }
+
+  private String formResultLine(MetaAnalysis ma, String dataFile, Constraint constr,
+                                final MetaAnalysisResult result, String name) {
+    StringJoiner line = new StringJoiner("\t");
+    line.add("META");
+    line.add(dataFile);
+    line.add(ext.formSciNot(constr.indexThreshold, 5, false));
+    line.add(ma.name);
+    line.add(name);
+    line.add("UNIVARIATE");
+    line.add(".");
+    line.add(".");
+    line.add(".");
+    line.add(Double.toString(result.pval));
+    line.add(getExcelPVal(result.beta, result.se));
+    line.add(Double.toString(result.beta));
+    line.add(Double.toString(result.se));
+    line.add(result.direction);
+    line.add(Integer.toString(result.num));
+    line.add(Integer.toString(result.cases));
+    line.add(Integer.toString(result.controls));
+    for (int i = 0; i < 8; i++) {
+      line.add(".");
+    }
+    String linStr = line.toString();
+    return linStr;
   }
 
   private void writeAndRunMR() {
@@ -2897,10 +3279,10 @@ public class GeneScorePipeline {
     for (Study study : studies) {
       mrrScripts.addAll(writeMarkerResults(study));
     }
+    mrrScripts.addAll(writeMetaMarkerResults());
     for (String script : mrrScripts) {
       log.report("Executing " + script);
       CmdLine.basic(log).run(Command.basic(script));
-
     }
   }
 
@@ -2908,8 +3290,7 @@ public class GeneScorePipeline {
                                  String resultPrefix, String middle, String end,
                                  PrintWriter writer) {
     String pvalExcl = rr.getNum() == 0 ? "."
-                                       : (rr.isLogistic() ? "=(1-(NORM.S.DIST(ABS(" + rr.getBeta()
-                                                            + "/" + rr.getSe() + "),TRUE)))*2"
+                                       : (rr.isLogistic() ? getExcelPVal(rr.getBeta(), rr.getSe())
                                                           : "=TDIST(" + Math.abs(rr.getStats())
                                                             + "," + rr.getNum() + ",2)");
 
@@ -2922,11 +3303,107 @@ public class GeneScorePipeline {
                                                                                                                               + "")).subtract(new BigDecimal(rr.getBaseRSq()
                                                                                                                                                              + "")))))
                                            .add(rr.getPval()).add(pvalExcl).add(rr.getBeta())
-                                           .add(rr.getSe()).add(rr.getNum()).add(rr.getnCases())
+                                           .add(rr.getSe()).add(getDirection(rr.getBeta()))
+                                           .add(rr.getNum()).add(rr.getnCases())
                                            .add(rr.getnControls()).add(middle).add(end).build());
 
     writer.println(line);
 
+  }
+
+  private String getDirection(double beta) {
+    if (Double.isNaN(beta)) return "?";
+    if (beta > 0) return "+";
+    if (beta < 0) return "-";
+    if (beta == 0) return "0";
+    return "?";
+  }
+
+  private List<String> writeMetaMarkerResults() {
+    List<String> mrrScripts = new ArrayList<>();
+
+    for (MetaFile mf : metaFiles) {
+      String dataFile = mf.metaRoot;
+      for (Constraint constr : analysisConstraints) {
+        String analysisKey = constr.analysisString;
+        for (MetaAnalysis ma : metaAnalyses) {
+          String prefDir = metaDir + "/" + META_DIRECTORY + "/" + dataFile + "/" + analysisKey + "/"
+                           + ma.name + "/";
+
+          MetaAnalysisSummary summary = summaryResults.get(constr, mf).get(ma);
+
+          String mrPrefDirMRStr = prefDir + "/mr/";
+          File mrPrefDirMR = new File(mrPrefDirMRStr);
+          mrPrefDirMR.mkdirs();
+          String mrPrefDirTSStr = prefDir + "/two-sample/";
+          File mrPrefDirTS = new File(mrPrefDirTSStr);
+          mrPrefDirTS.mkdirs();
+
+          PrintWriter twoSampleExposure = Files.getAppropriateWriter(mrPrefDirTSStr + "exposure_"
+                                                                     + ma.name + ".out");
+          PrintWriter twoSampleOutcome = Files.getAppropriateWriter(mrPrefDirTSStr + "outcome_"
+                                                                    + ma.name + ".out");
+          twoSampleExposure.println(TWO_SAMPLE_HDR);
+          twoSampleOutcome.println(TWO_SAMPLE_HDR);
+
+          // exposure is info from meta file
+          // outcome is from gsp
+
+          String mrrInputFile = MARKER_REGRESSION_PREFIX + ma.name + MARKER_REGRESSION_EXTEN;
+          PrintWriter markerWriter = Files.getAppropriateWriter(mrPrefDirMRStr + mrrInputFile);
+          markerWriter.println(MARKER_RESULT_HEADER);
+
+          String resultPrefix = new StringJoiner("\t").add("META").add(dataFile)
+                                                      .add(ext.formSciNot(constr.indexThreshold, 5,
+                                                                          false))
+                                                      .toString();
+
+          int foundMkrs = 0;
+          for (String marker : mf.metaMarkers.keySet()) {
+            if (!summary.perMarkerResultsUni.containsKey(marker)) {
+              continue;
+            }
+            foundMkrs++;
+
+            MetaMarker metaMarker = mf.metaMarkers.get(marker);
+            double metaBeta = metaMarker.beta;
+            double metaSE = metaMarker.se;
+
+            double markerBeta = summary.perMarkerResultsUni.get(marker).beta;
+            double markerSE = summary.perMarkerResultsUni.get(marker).se;
+
+            if (!Double.isNaN(markerBeta) && !Double.isNaN(markerSE)) {
+              markerWriter.println(resultPrefix + "\t" + ma.name + "\t" + marker + "\t" + metaBeta
+                                   + "\t" + metaSE + "\t" + markerBeta + "\t" + markerSE);
+
+              twoSampleExposure.println(marker + "\t" + metaMarker.alleles.a1 + "\t"
+                                        + metaMarker.alleles.a2 + "\t" + metaMarker.freq + "\t"
+                                        + metaBeta + "\t" + metaSE + "\t" + metaMarker.pval
+                                        + "\tExposure");
+
+              String FREQ = ".";
+              twoSampleOutcome.println(marker + "\t" + metaMarker.alleles.a1 + "\t"
+                                       + metaMarker.alleles.a2 + "\t" + FREQ + "\t" + markerBeta
+                                       + "\t" + markerSE + "\t"
+                                       + summary.perMarkerResultsUni.get(marker).pval
+                                       + "\tOutcome");
+            }
+          }
+          twoSampleExposure.close();
+          twoSampleOutcome.close();
+          markerWriter.close();
+          if (foundMkrs > 1) {
+            String mrrScript = writeMRRScript(mrPrefDirMR, ma.name);
+            mrrScripts.add(mrrScript);
+            String tsRScript = writeTwoSampleRScript(mrPrefDirTS, ma.name);
+            mrrScripts.add(tsRScript);
+          }
+        }
+
+      }
+    }
+
+    return mrrScripts;
   }
 
   private List<String> writeMarkerResults(Study study) {
@@ -3043,7 +3520,7 @@ public class GeneScorePipeline {
           String pheno = study.phenoFiles.get(i);
           PhenoData pd = study.phenoData.get(pheno);
           RegressionResult rrPheno = study.regressions.get(constr, mf).get(pd);
-          betaWriter.print(pheno);
+          betaWriter.print(pd.phenoName);
           betaWriter.print("\t");
           betaWriter.print(rrPheno.getBeta());
           betaWriter.print("\t");
@@ -3075,8 +3552,8 @@ public class GeneScorePipeline {
           }
           betaWriter.println();
 
-          forestWriter.println(pheno + "\t" + prefDir + "/" + REGRESSION_BETA_FILE + "\t\t" + pref
-                               + "," + pheno);
+          forestWriter.println(pd.phenoName + "\t" + prefDir + "/" + REGRESSION_BETA_FILE + "\t\t"
+                               + pref + "," + pheno);
         }
         betaWriter.close();
         forestWriter.close();
@@ -3122,7 +3599,6 @@ public class GeneScorePipeline {
 
     commands.add("png(filename='RadialMR.png')");
     commands.add("RadialMR::plot_radial(c(ivw.radial, egger.radial),T,F,F)");
-    commands.add("print(RadialMR)");
     commands.add("dev.off()");
 
     Files.writeIterable(commands, ext.verifyDirFormat(prefDir.getAbsolutePath()) + TWO_SAMPLE_PREFIX
@@ -3439,14 +3915,6 @@ public class GeneScorePipeline {
       System.err.println("Error - argument 'workDir' must be a valid directory");
       System.exit(1);
     }
-    // if (regress && !runPlink) {
-    // System.err.println("Error - '-runPlink' option is required for '-regress' option");
-    // System.exit(1);
-    // }
-    // if (writeHist && !runPlink) {
-    // System.err.println("Error - '-runPlink' option is required for '-writeHist' option");
-    // System.exit(1);
-    // }
     GeneScorePipeline gsp = new GeneScorePipeline(workDir, iT, mZ, wT, mT, runMetaHW, rLibsDir,
                                                   plotOddsRatio, build, log);
     gsp.runPipeline();
