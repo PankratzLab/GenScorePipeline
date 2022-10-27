@@ -70,11 +70,12 @@ public class MergeExtractPipeline {
   String regionsFile = null;
   int[][] regions;
   String[] regionLabels;
+  Map<String, String> renameMap = new HashMap<>();
 
   boolean permissiveLookup = true;
   boolean splitOutput = false;
   boolean overwrite = false;
-  boolean renameMarkers = true;
+  boolean renameMarkersLabel = true;
   boolean bestGuessOutput = false;
   float bestGuessThreshold = 0;
 
@@ -217,7 +218,12 @@ public class MergeExtractPipeline {
   }
 
   public MergeExtractPipeline setRenameMarkers(boolean rename) {
-    renameMarkers = rename;
+    renameMarkersLabel = rename;
+    return this;
+  }
+
+  public MergeExtractPipeline setRenameMarkersFile(String renameFile) {
+    renameMap = HashVec.loadFileColumnToMap(renameFile, 0, 1, false, log);
     return this;
   }
 
@@ -484,8 +490,8 @@ public class MergeExtractPipeline {
       plinkRoots = null;
       String outRoot = dir + "plink_merged";
       String mergeCommand = PlinkMergePrep.merge(PlinkMergePrep.BEDBIMFAM, outRoot, overwrite,
-                                                 renameMarkers, regionsFile, markersFile, roots,
-                                                 lbls);
+                                                 renameMarkersLabel, regionsFile, markersFile,
+                                                 roots, lbls);
 
       log.report("Running PLINK merge command: " + mergeCommand);
       boolean result = CmdLine.runDefaults(mergeCommand, dir);
@@ -534,8 +540,9 @@ public class MergeExtractPipeline {
                                                        .mapFile(dataSources.get(0).mapFile)
                                                        .regions(regions).markers(markers)
                                                        .markerLocationMap(markerLocationMap)
-                                                       .markerNamePrepend(renameMarkers ? dataSources.get(0).label
-                                                                                        : "")
+                                                       .markerRenameMap(renameMap)
+                                                       .markerNamePrepend(renameMarkersLabel ? dataSources.get(0).label
+                                                                                             : "")
                                                        .logger(log).build();
     Table<String, String, HashMap<String, Annotation>> annotations = getAnnotations(dd1,
                                                                                     getAnnotationLabels(dd1,
@@ -550,9 +557,10 @@ public class MergeExtractPipeline {
                                                          .idFile(dataSources.get(i).idFile)
                                                          .mapFile(dataSources.get(i).mapFile)
                                                          .regions(regions).markers(markers)
+                                                         .markerRenameMap(renameMap)
                                                          .markerLocationMap(markerLocationMap)
-                                                         .markerNamePrepend(renameMarkers ? dataSources.get(i).label
-                                                                                          : "")
+                                                         .markerNamePrepend(renameMarkersLabel ? dataSources.get(i).label
+                                                                                               : "")
                                                          .logger(log).build();
       if (!dd2.isEmpty()) {
         String[] dd2Annots = getAnnotationLabels(dd2, dataSources.get(i).dataFile,
@@ -997,7 +1005,8 @@ public class MergeExtractPipeline {
     String logFile = null;
     boolean split = false;
     boolean overwrite = false;
-    boolean rename = false;
+    boolean renameLabel = false;
+    String renameFile = null;
     float bestThresh = 0;
     boolean bestGuess = false;
     boolean permissive = true;
@@ -1033,8 +1042,8 @@ public class MergeExtractPipeline {
                    + permissive + " (default))\n"
                    + "   (10) Optional: Overwrite files if they already exist (i.e. overwrite="
                    + overwrite + " (default))\n"
-                   + "   (11) Optional: Rename markers in any data files to dataLabel+MarkerName (i.e. rename="
-                   + rename + " (default))\n" + "\n"
+                   + "   (11) Optional: Rename markers in any data files to dataLabel+MarkerName (i.e. renameLabel="
+                   + renameLabel + " (default))\n" + "\n"
                    + "   (12) Optional: if source data contains genotype probabilities and output format is in dosage values, use \"Best Guess\" dosage rather than computed dosage value. The value specified is used such that if all genotype probability values are below the given value, the dosage value is set to missing. (i.e. best="
                    + bestThresh + " (not the default))\n" + "";
 
@@ -1069,8 +1078,11 @@ public class MergeExtractPipeline {
       } else if (arg.startsWith("overwrite=")) {
         overwrite = ext.parseBooleanArg(arg);
         numArgs--;
-      } else if (arg.startsWith("rename=")) {
-        rename = ext.parseBooleanArg(arg);
+      } else if (arg.startsWith("renameLabel=")) {
+        renameLabel = ext.parseBooleanArg(arg);
+        numArgs--;
+      } else if (arg.startsWith("renameFile=")) {
+        renameFile = ext.parseStringArg(arg);
         numArgs--;
       } else if (arg.startsWith("permissive=")) {
         permissive = ext.parseBooleanArg(arg);
@@ -1128,7 +1140,11 @@ public class MergeExtractPipeline {
       mep.setOverwrite();
     }
     mep.setSplitOutputByRegions(split);
-    mep.setRenameMarkers(rename);
+    if (renameFile != null) {
+      mep.setRenameMarkersFile(renameFile);
+    } else if (renameLabel) {
+      mep.setRenameMarkers(renameLabel);
+    }
     mep.setOutputFiles(outfileD, outfileM);
     if (bestGuess) {
       mep.setBestGuessOutput(bestGuess);
