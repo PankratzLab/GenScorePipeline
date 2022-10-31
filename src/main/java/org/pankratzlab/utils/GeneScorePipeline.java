@@ -2989,7 +2989,7 @@ public class GeneScorePipeline {
           PrintWriter writer = Files.getAppropriateWriter(metaDir + "/" + META_DIRECTORY + "/"
                                                           + ma.name + "_" + mf.metaRoot + "_"
                                                           + constr.analysisString + "_InvVar.out");
-          writer.println("SUBTYPE\tVARIATE\tBETA\tSE\tPVAL\tNUM\tCASES\tCONTROLS");
+          writer.println("SUBTYPE\tVARIATE\tBETA\tSE\tPVAL\tDIRECTION\tNUM\tCASES\tCONTROLS");
 
           final StringBuilder prsDir = new StringBuilder();
           final List<double[]> prsBS = new ArrayList<>();
