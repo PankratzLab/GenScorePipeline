@@ -3044,7 +3044,7 @@ public class GeneScorePipeline {
 
             for (String mkr : allMarkerNames) {
               if (!mkrRegsUni.containsKey(mkr)) {
-                perMarkerUniDirections.get(mkr).append(".");
+                perMarkerUniDirections.get(mkr).append("?");
               } else {
                 perMarkerUniDirections.get(mkr).append(getDirection(mkrRegsUni.get(mkr).getBeta()));
                 perMarkerBS.get(mkr).add(new double[] {mkrRegsUni.get(mkr).getBeta(),
@@ -3057,7 +3057,7 @@ public class GeneScorePipeline {
                                             + mkrRegsUni.get(mkr).getnControls();
               }
               if (!mkrRegsMulti.containsKey(mkr)) {
-                perMarkerMultiDirections.get(mkr).append(".");
+                perMarkerMultiDirections.get(mkr).append("?");
               } else {
                 perMarkerMultiDirections.get(mkr)
                                         .append(getDirection(mkrRegsMulti.get(mkr).getBeta()));
