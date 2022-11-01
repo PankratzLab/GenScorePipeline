@@ -2964,6 +2964,10 @@ public class GeneScorePipeline {
 
   private void processMetaAnalyses() {
 
+    if (!Files.exists(metaDir + META_ANALYSIS_DEFINITIONS_FILE)) {
+      return;
+    }
+
     // create directory structure
     new File(metaDir + "/" + META_DIRECTORY).mkdir();
     for (MetaFile mf : metaFiles) {
