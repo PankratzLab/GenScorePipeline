@@ -1925,7 +1925,7 @@ public class GeneScorePipeline {
 
       try {
         BufferedReader reader = Files.getAppropriateReader(study.studyDir + pheno);
-        String[] header = reader.readLine().split("\t", -1);
+        String[] header = reader.readLine().trim().split("\t", -1);
         // fid == header[0]
         // iid == header[1]
         // depvar = header[2];
