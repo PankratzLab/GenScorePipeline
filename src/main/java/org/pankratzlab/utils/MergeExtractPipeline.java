@@ -1142,9 +1142,8 @@ public class MergeExtractPipeline {
     mep.setSplitOutputByRegions(split);
     if (renameFile != null) {
       mep.setRenameMarkersFile(renameFile);
-    } else if (renameLabel) {
-      mep.setRenameMarkers(renameLabel);
     }
+    mep.setRenameMarkers(renameLabel);
     mep.setOutputFiles(outfileD, outfileM);
     if (bestGuess) {
       mep.setBestGuessOutput(bestGuess);
