@@ -3280,13 +3280,23 @@ public class GeneScorePipeline {
 
   private void writeAndRunMR() {
     List<String> mrrScripts = new ArrayList<>();
+    List<String> metaMrrScripts = new ArrayList<>();
     for (Study study : studies) {
       mrrScripts.addAll(writeMarkerResults(study));
     }
-    mrrScripts.addAll(writeMetaMarkerResults());
+    if (!metaAnalyses.isEmpty()) {
+      metaMrrScripts.addAll(writeMetaMarkerResults());
+    }
     for (String script : mrrScripts) {
       log.report("Executing " + script);
       CmdLine.basic(log).run(Command.basic(script));
+    }
+    if (!metaAnalyses.isEmpty()) {
+      System.out.println("Executing meta-analysis MR scripts...");
+      for (String script : metaMrrScripts) {
+        log.report("Executing " + script);
+        CmdLine.basic(log).run(Command.basic(script));
+      }
     }
   }
 
@@ -3596,14 +3606,14 @@ public class GeneScorePipeline {
     commands.add("write.table(egger.outliers, \"MR_egger_outlier_" + pheno
                  + ".txt\", sep=\"\\t\", col.names=T, row.names=F, quote=F)");
 
-    commands.add("ivw.radial<-RadialMR::ivw_radial(dat)");
-    commands.add("ivw.outliers<- ivw.radial$outliers");
-    commands.add("write.table(ivw.outliers, \"MR_ivw_outlier_" + pheno
-                 + ".txt\", sep=\"\\t\", col.names=T, row.names=F, quote=F)");
-
-    commands.add("png(filename='RadialMR.png')");
-    commands.add("RadialMR::plot_radial(c(ivw.radial, egger.radial),T,F,F)");
-    commands.add("dev.off()");
+    // commands.add("ivw.radial<-RadialMR::ivw_radial(dat)");
+    // commands.add("ivw.outliers<- ivw.radial$outliers");
+    // commands.add("write.table(ivw.outliers, \"MR_ivw_outlier_" + pheno
+    // + ".txt\", sep=\"\\t\", col.names=T, row.names=F, quote=F)");
+    //
+    // commands.add("png(filename='RadialMR.png')");
+    // commands.add("RadialMR::plot_radial(c(ivw.radial, egger.radial),T,F,F)");
+    // commands.add("dev.off()");
 
     Files.writeIterable(commands, ext.verifyDirFormat(prefDir.getAbsolutePath()) + TWO_SAMPLE_PREFIX
                                   + pheno + ".R");
