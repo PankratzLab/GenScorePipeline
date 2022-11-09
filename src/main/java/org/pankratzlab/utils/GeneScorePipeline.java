@@ -156,6 +156,7 @@ public class GeneScorePipeline {
   private final String metaDir;
   private final String rLibsDir;
   private final boolean plotOddsRatio;
+  private final boolean overwrite;
 
   private float[] indexThresholds = new float[] {DEFAULT_INDEX_THRESHOLD};
   private int[] windowMinSizePerSides = new int[] {DEFAULT_WINDOW_MIN_SIZE_PER_SIDE};
@@ -508,7 +509,11 @@ public class GeneScorePipeline {
                                  + ext.replaceWithLinuxSafeCharacters(mf.metaRoot + "\t"
                                                                       + constr.analysisString)
                                  + "_dosage.ser";
-        if (!Files.exists(serOutput)) {
+        boolean exists = !Files.exists(serOutput);
+        if (exists && overwrite) {
+          log.report("Serialized data file found, but overwrite flag set - reloading data from source...");
+        }
+        if (overwrite || !exists) {
           log.report("Loading data file " + dataSources.get(0).dataFile);
           DosageData d0 = new DosageData.DosageDataBuilder().dosageFile(dataSources.get(0).dataFile)
                                                             .dataIndexFile(dataSources.get(0).dataIndexFile)
@@ -1270,8 +1275,10 @@ public class GeneScorePipeline {
 
   public GeneScorePipeline(String workDir, float[] indexThresholds, int[] windowMins,
                            float[] windowExtThresholds, double missThresh, boolean runMetaHW,
-                           String rLibsDir, boolean plotOddsRatio, GenomeBuild build, Logger log) {
+                           String rLibsDir, boolean plotOddsRatio, GenomeBuild build,
+                           boolean overwrite, Logger log) {
     this.log = log;
+    this.overwrite = overwrite;
     this.build = build;
     this.metaDir = ext.verifyDirFormat(workDir);
     this.runMetaHW = runMetaHW;
@@ -1316,8 +1323,9 @@ public class GeneScorePipeline {
                             + ") is more stringent than index threshold (" + indexThresh
                             + "), index threshold will be used as window extension threshold");
             windowThresh = indexThresh;
-          } else
+          } else {
             windowThresh = w;
+          }
           analysisConstraints.add(new Constraint(indexThresh, minSize, windowThresh));
         }
       }
@@ -1370,7 +1378,12 @@ public class GeneScorePipeline {
   private void loadDataCounts() {
     String countsFile = metaDir + "data.cnt";
 
-    if ((new File(countsFile).exists())) {
+    boolean exists = (new File(countsFile).exists());
+
+    if (exists && overwrite) {
+      log.report("Data counts exists but overwrite flag set - reloading data counts...");
+    }
+    if (!overwrite && exists) {
       try {
         BufferedReader reader = Files.getAppropriateReader(countsFile);
         String line = null;
@@ -1601,7 +1614,9 @@ public class GeneScorePipeline {
 
   private void loadMetaAnalysisFile() {
     if (!Files.exists(metaDir + META_ANALYSIS_DEFINITIONS_FILE)) {
-      // TODO log
+      if (studies.size() > 1) {
+        log.report("No meta analysis file (meta.analysis) found; no meta analysis will be run.");
+      }
       return;
     }
     String[] metaAnalysisDefs = HashVec.loadFileToStringArray(metaDir
@@ -2043,7 +2058,11 @@ public class GeneScorePipeline {
         String key = constraint.analysisString;
         String crossFilterFile = study.studyDir + dataFile + "/" + key + "/"
                                  + CROSS_FILTERED_DATAFILE;
-        if ((new File(crossFilterFile).exists())) {
+        final boolean exists = new File(crossFilterFile).exists();
+        if (exists && overwrite) {
+          log.report("Cross-filtered data file already exists, but overwrite flag was set; recreating ...");
+        }
+        if (exists && !overwrite) {
           log.report("Cross-filtered data file already exists! [ --> '" + crossFilterFile + "']");
           study.hitSnpCounts.put(constraint, mf, Files.countLines(crossFilterFile, 1));
           continue;
@@ -2263,7 +2282,11 @@ public class GeneScorePipeline {
         File prefDir = new File(getDirPath(study, dataFile, analysisKey));
         String crossFilterFile = prefDir + "/" + CROSS_FILTERED_DATAFILE;
         String hitsFile = prefDir + FILE_PREFIX_HITS + analysisKey + FILE_EXT_OUT;
-        if ((new File(hitsFile)).exists()) {
+        final boolean exists = (new File(hitsFile)).exists();
+        if (exists && overwrite) {
+          log.report("Hit window analysis file already exists, but overwrite flag was set; recreating ... ");
+        }
+        if (exists && !overwrite) {
           log.report("Hit window analysis file already exists! [ --> '" + hitsFile + "']");
           study.hitWindowCnts.put(constr, mf, Files.countLines(hitsFile, 1));
           continue;
@@ -3292,7 +3315,7 @@ public class GeneScorePipeline {
       CmdLine.basic(log).run(Command.basic(script));
     }
     if (!metaAnalyses.isEmpty()) {
-      System.out.println("Executing meta-analysis MR scripts...");
+      log.report("Executing meta-analysis MR scripts...");
       for (String script : metaMrrScripts) {
         log.report("Executing " + script);
         CmdLine.basic(log).run(Command.basic(script));
@@ -3478,7 +3501,6 @@ public class GeneScorePipeline {
             if (mf.metaMarkers.containsKey(marker)) { // may have been dropped by meta HitWindows
               RegressionResult rrResult = study.markerRegressions.get(constr, mf).get(pd, marker);
               if (rrResult == null) {
-                System.out.println("No regression for " + marker);
                 continue;
               }
 
@@ -3567,7 +3589,7 @@ public class GeneScorePipeline {
           betaWriter.println();
 
           forestWriter.println(pd.phenoName + "\t" + prefDir + "/" + REGRESSION_BETA_FILE + "\t\t"
-                               + pref + "," + pheno);
+                               + ext.rootOf(pheno));
         }
         betaWriter.close();
         forestWriter.close();
@@ -3775,6 +3797,7 @@ public class GeneScorePipeline {
     GenomeBuild toBuild = GenomeBuild.HG19;
     String rLibsDir = null;
     boolean plotOddsRatio = false;
+    boolean overwrite = false;
 
     String usage = "\n"
                    + "GeneScorePipeline is a convention-driven submodule.  It relies on a standard folder structure and file naming scheme:\n"
@@ -3907,6 +3930,8 @@ public class GeneScorePipeline {
         plotOddsRatio = true;
       } else if (arg.startsWith("log=")) {
         logFile = arg.split("=")[1];
+      } else if (arg.equals("-overwrite")) {
+        overwrite = true;
       } else {
         fail = true;
         System.err.println("Error - invalid argument: " + arg);
@@ -3930,7 +3955,7 @@ public class GeneScorePipeline {
       System.exit(1);
     }
     GeneScorePipeline gsp = new GeneScorePipeline(workDir, iT, mZ, wT, mT, runMetaHW, rLibsDir,
-                                                  plotOddsRatio, build, log);
+                                                  plotOddsRatio, build, overwrite, log);
     gsp.runPipeline();
   }
 
