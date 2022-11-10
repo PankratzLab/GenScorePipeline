@@ -1817,7 +1817,7 @@ public class GeneScorePipeline {
               String[] dataAlleles = e.getValue();
 
               Alleles metaAlleles = metaHitMkrAlleles.get(e.getKey());
-              if (metaAlleles == null) {
+              if (metaAlleles == null && mf.metaMarkerAliasLookup.containsKey(e.getKey())) {
                 metaAlleles = metaHitMkrAlleles.get(mf.metaMarkerAliasLookup.get(e.getKey())[0]);
               }
               if (metaAlleles == null) return false;
