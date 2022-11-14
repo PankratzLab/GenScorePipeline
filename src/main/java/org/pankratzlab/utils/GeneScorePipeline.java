@@ -509,7 +509,7 @@ public class GeneScorePipeline {
                                  + ext.replaceWithLinuxSafeCharacters(mf.metaRoot + "\t"
                                                                       + constr.analysisString)
                                  + "_dosage.ser";
-        boolean exists = !Files.exists(serOutput);
+        boolean exists = Files.exists(serOutput);
         if (exists && overwrite) {
           log.report("Serialized data file found, but overwrite flag set - reloading data from source...");
         }
