@@ -566,6 +566,7 @@ public class GeneScorePipeline {
       private int nCases;
       private int nControls;
       private double stats;
+      private int droppedSnps = 0;
 
       private Builder() {
 
@@ -655,6 +656,11 @@ public class GeneScorePipeline {
         return this;
       }
 
+      private Builder setDroppedSnps(int num) {
+        this.droppedSnps = num;
+        return this;
+      }
+
     }
 
     private final boolean logistic;
@@ -667,6 +673,7 @@ public class GeneScorePipeline {
     private final int nCases;
     private final int nControls;
     private final double stats;
+    private final int droppedSnps;
 
     private RegressionResult(Builder builder) {
       super();
@@ -680,6 +687,7 @@ public class GeneScorePipeline {
       nCases = builder.nCases;
       nControls = builder.nControls;
       stats = builder.stats;
+      droppedSnps = builder.droppedSnps;
     }
 
     /**
@@ -2661,8 +2669,9 @@ public class GeneScorePipeline {
             }
             Map<String, Double> dosages = new HashMap<>();
             for (int s = 0; s < ids.length; s++) {
-              dosages.put(ids[s][0] + "\t" + ids[s][1], mkrDosages[s][mkrInd]);
-              indivAllMkrs.get(ids[s][0] + "\t" + ids[s][1])[indMkr] = mkrDosages[s][mkrInd];
+              final String key = ids[s][0] + "\t" + ids[s][1];
+              dosages.put(key, mkrDosages[s][mkrInd]);
+              indivAllMkrs.get(key)[indMkr] = mkrDosages[s][mkrInd];
             }
 
             RegressionResult rrResultPerMkr = actualRegression(dosages, null, pd);
@@ -2737,12 +2746,42 @@ public class GeneScorePipeline {
       }
     }
 
+    double DOSAGE_THRESHOLD = 5;
+    double DOSAGE_MAX_THRESHOLD = (pd.indivs.size() * 2) - 5;
+
+    List<Integer> removeCols = new ArrayList<>();
+    for (int c = 0; c < indepData.get(0).length; c++) {
+      double sum = 0;
+      for (int r = 0; r < indepData.size(); r++) {
+        sum += indepData.get(r)[c];
+      }
+      if (sum < DOSAGE_THRESHOLD || sum > DOSAGE_MAX_THRESHOLD) {
+        removeCols.add(c);
+      }
+    }
+    if (removeCols.size() > 0) {
+      log.reportWarning("Removing " + removeCols.size() + " low-variance independent variables...");
+      removeCols.sort(Integer::compare);
+      for (int i = removeCols.size() - 1; i >= 0; i--) {
+        for (int r = 0; r < indepData.size(); r++) {
+          double[] newCov = new double[indepData.get(r).length - 1];
+          int indx = 0;
+          for (int c = 0; c < indepData.get(r).length; c++) {
+            if (c == removeCols.get(i)) continue;
+            newCov[indx++] = indepData.get(r)[c];
+          }
+          indepData.set(r, newCov);
+        }
+      }
+    }
+
     double[][] baseCovars = new double[baselineIndeps.size()][];
     double[][] covars = new double[indepData.size()][];
     for (int k = 0; k < covars.length; k++) {
       covars[k] = indepData.get(k);
       baseCovars[k] = baselineIndeps.get(k);
     }
+
     int cases = 0;
     int controls = 0;
     Multiset<Double> phenos = ImmutableMultiset.copyOf(depData);
@@ -2762,17 +2801,21 @@ public class GeneScorePipeline {
                                                                      baseCovars, false, true);
     RegressionModel model = RegressionModel.determineAppropriate(Doubles.toArray(depData), covars,
                                                                  false, true);
-    String[] varNames = new String[scoreNames.size() + pd.covars.size() + covarOrder.size()];
-    int index = 0;
+    List<String> varNameList = new ArrayList<>();
     for (String v : scoreNames) {
-      varNames[index++] = v;
+      varNameList.add(v);
     }
     for (String v : pd.covars) {
-      varNames[index++] = v;
+      varNameList.add(v);
     }
     for (String v : covarOrder) {
-      varNames[index++] = v;
+      varNameList.add(v);
     }
+    for (int i = removeCols.size() - 1; i >= 0; i--) {
+      varNameList.remove((int) removeCols.get(i));
+    }
+
+    String[] varNames = varNameList.toArray(new String[0]);
     model.setVarNames(varNames);
 
     Map<String, RegressionResult> results = new HashMap<>();
@@ -2818,6 +2861,7 @@ public class GeneScorePipeline {
           rr.setStats(model.getStats()[ind]);
         }
       }
+      rr.setDroppedSnps(removeCols.size());
       RegressionResult rrResult = rr.build();
       results.put(var, rrResult);
     }
@@ -3239,8 +3283,22 @@ public class GeneScorePipeline {
                 Map<String, RegressionResult> resMult = study.multivarRegressions.get(constr, mf)
                                                                                  .row(study.phenoData.get(pheno));
                 mkrs.stream().filter(resMult::containsKey).forEach(s -> {
-                  writeSingleResult(phenoName, s, "MULTIVARIATE", resMult.get(s), resultPrefix,
-                                    middle, endPRS, writer);
+                  final RegressionResult rr2 = resMult.get(s);
+                  String myEndPRS = new StringJoiner("\t").add(String.valueOf(dataCounts.get(dFile)
+                                                                                        .get(key)
+                                                                              - rr2.droppedSnps))
+                                                          .add(String.valueOf(study.hitWindowCnts.get(constr,
+                                                                                                      mf)
+                                                                              - rr2.droppedSnps))
+                                                          .add(String.valueOf(study.hitSnpCounts.get(constr,
+                                                                                                     mf)))
+                                                          .add(String.valueOf(study.scores.get(constr,
+                                                                                               mf)[0]))
+                                                          .add(String.valueOf(study.scores.get(constr,
+                                                                                               mf)[1]))
+                                                          .toString();
+                  writeSingleResult(phenoName, s, "MULTIVARIATE", rr2, resultPrefix, middle,
+                                    myEndPRS, writer);
                 });
               }
             }
