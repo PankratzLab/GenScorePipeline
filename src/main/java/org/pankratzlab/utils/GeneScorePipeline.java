@@ -162,6 +162,7 @@ public class GeneScorePipeline {
   private int[] windowMinSizePerSides = new int[] {DEFAULT_WINDOW_MIN_SIZE_PER_SIDE};
   private float[] windowExtensionThresholds = new float[] {DEFAULT_WINDOW_EXTENSION_THRESHOLD};
   private double minMissThresh = DEFAULT_MIN_MISS_THRESH;
+  private int cmacThresh = 5;
 
   // private int numThreads = 1;
   // private boolean runPlink = false;
@@ -802,20 +803,6 @@ public class GeneScorePipeline {
         return trioCount;
       }
 
-      /**
-       * @return the wilcoxonPVal
-       */
-      public double getWilcoxonPVal() {
-        return wilcoxonPVal;
-      }
-
-      /**
-       * @return the pairedTPVal
-       */
-      public double getPairedTPVal() {
-        return pairedTPVal;
-      }
-
     }
 
     private final List<Double> caseScores;
@@ -1282,9 +1269,9 @@ public class GeneScorePipeline {
   }
 
   public GeneScorePipeline(String workDir, float[] indexThresholds, int[] windowMins,
-                           float[] windowExtThresholds, double missThresh, boolean runMetaHW,
-                           String rLibsDir, boolean plotOddsRatio, GenomeBuild build,
-                           boolean overwrite, Logger log) {
+                           float[] windowExtThresholds, double missThresh, int cmacThresh,
+                           boolean runMetaHW, String rLibsDir, boolean plotOddsRatio,
+                           GenomeBuild build, boolean overwrite, Logger log) {
     this.log = log;
     this.overwrite = overwrite;
     this.build = build;
@@ -1293,6 +1280,7 @@ public class GeneScorePipeline {
     this.rLibsDir = rLibsDir;
     this.plotOddsRatio = plotOddsRatio;
     this.minMissThresh = missThresh;
+    this.cmacThresh = cmacThresh;
     this.indexThresholds = indexThresholds;
     windowMinSizePerSides = windowMins;
     windowExtensionThresholds = windowExtThresholds;
@@ -2746,8 +2734,8 @@ public class GeneScorePipeline {
       }
     }
 
-    double DOSAGE_THRESHOLD = 5;
-    double DOSAGE_MAX_THRESHOLD = (pd.indivs.size() * 2) - 5;
+    double DOSAGE_THRESHOLD = cmacThresh;
+    double DOSAGE_MAX_THRESHOLD = (pd.indivs.size() * 2) - cmacThresh;
 
     List<Integer> removeCols = new ArrayList<>();
     for (int c = 0; c < indepData.get(0).length; c++) {
@@ -3531,75 +3519,12 @@ public class GeneScorePipeline {
 
         for (int i = 0; i < study.phenoFiles.size(); i++) {
           String pheno = study.phenoFiles.get(i);
-          PhenoData pd = study.phenoData.get(pheno);
-
-          String mrPrefDirMRStr = getDirPath(study, dataFile, analysisKey) + "mr/mr/" + pheno + "/";
-          File mrPrefDirMR = new File(mrPrefDirMRStr);
-          mrPrefDirMR.mkdirs();
-          String mrPrefDirTSStr = getDirPath(study, dataFile, analysisKey) + "mr/two-sample/"
-                                  + pheno + "/";
-          File mrPrefDirTS = new File(mrPrefDirTSStr);
-          mrPrefDirTS.mkdirs();
-
-          PrintWriter twoSampleExposure = Files.getAppropriateWriter(mrPrefDirTSStr + "exposure_"
-                                                                     + pheno + ".out");
-          PrintWriter twoSampleOutcome = Files.getAppropriateWriter(mrPrefDirTSStr + "outcome_"
-                                                                    + pheno + ".out");
-          twoSampleExposure.println(TWO_SAMPLE_HDR);
-          twoSampleOutcome.println(TWO_SAMPLE_HDR);
-
-          // exposure is info from meta file
-          // outcome is from gsp
-
-          String mrrInputFile = MARKER_REGRESSION_PREFIX + pheno + MARKER_REGRESSION_EXTEN;
-          PrintWriter markerWriter = Files.getAppropriateWriter(mrPrefDirMRStr + mrrInputFile);
-          markerWriter.println(MARKER_RESULT_HEADER);
-
-          for (String marker : markersInOrder) {
-            if (mf.metaMarkers.containsKey(marker)) { // may have been dropped by meta HitWindows
-              RegressionResult rrResult = study.markerRegressions.get(constr, mf).get(pd, marker);
-              if (rrResult == null) {
-                continue;
-              }
-
-              MetaMarker metaMarker = mf.metaMarkers.get(marker);
-              double metaBeta = metaMarker.beta;
-              double metaSE = metaMarker.se;
-
-              double markerBeta = rrResult.getBeta();
-              double markerSE = rrResult.se;
-
-              if (!Double.isNaN(markerBeta) && !Double.isNaN(markerSE)) {
-                markerWriter.println(resultPrefix + "\t" + pheno + "\t" + marker + "\t" + metaBeta
-                                     + "\t" + metaSE + "\t" + markerBeta + "\t" + markerSE);
-
-                twoSampleExposure.println(marker + "\t" + metaMarker.alleles.a1 + "\t"
-                                          + metaMarker.alleles.a2 + "\t" + metaMarker.freq + "\t"
-                                          + metaBeta + "\t" + metaSE + "\t" + metaMarker.pval
-                                          + "\tExposure");
-
-                String FREQ = ".";
-                twoSampleOutcome.println(marker + "\t" + metaMarker.alleles.a1 + "\t"
-                                         + metaMarker.alleles.a2 + "\t" + FREQ + "\t" + markerBeta
-                                         + "\t" + markerSE + "\t" + rrResult.getPval()
-                                         + "\tOutcome");
-              }
-            }
-          }
-          twoSampleExposure.close();
-          twoSampleOutcome.close();
-          markerWriter.close();
-          if (markersInOrder.size() > 1) {
-            String mrrScript = writeMRRScript(mrPrefDirMR, pheno);
-            mrrScripts.add(mrrScript);
-            String tsRScript = writeTwoSampleRScript(mrPrefDirTS, pheno);
-            mrrScripts.add(tsRScript);
-          }
+          writeRScripts(study, mrrScripts, mf, dataFile, constr, analysisKey, resultPrefix,
+                        markersInOrder, pheno, true);
+          writeRScripts(study, mrrScripts, mf, dataFile, constr, analysisKey, resultPrefix,
+                        markersInOrder, pheno, false);
         }
 
-        String pref = new StringJoiner("//").add(study.studyName).add(dataFile)
-                                            .add(ext.formSciNot(constr.indexThreshold, 5, false))
-                                            .toString();
         PrintWriter forestWriter = Files.getAppropriateWriter(prefDir + "/forest_input.txt");
         PrintWriter betaWriter = Files.getAppropriateWriter(prefDir + "/" + REGRESSION_BETA_FILE);
         betaWriter.print("MarkerName\tbeta\tse");
@@ -3660,9 +3585,89 @@ public class GeneScorePipeline {
     return mrrScripts;
   }
 
+  private void writeRScripts(Study study, List<String> mrrScripts, MetaFile mf, String dataFile,
+                             Constraint constr, String analysisKey, String resultPrefix,
+                             List<String> markersInOrder, String pheno, boolean univariate) {
+    PhenoData pd = study.phenoData.get(pheno);
+
+    String var = univariate ? "univar" : "multivar";
+
+    String mrPrefDirMRStr = getDirPath(study, dataFile, analysisKey) + "mr/mr_" + var + "/" + pheno
+                            + "/";
+    File mrPrefDirMR = new File(mrPrefDirMRStr);
+    mrPrefDirMR.mkdirs();
+    String mrPrefDirTSStr = getDirPath(study, dataFile, analysisKey) + "mr/two-sample_" + var + "/"
+                            + pheno + "/";
+    File mrPrefDirTS = new File(mrPrefDirTSStr);
+    mrPrefDirTS.mkdirs();
+
+    PrintWriter twoSampleExposure = Files.getAppropriateWriter(mrPrefDirTSStr + "exposure_" + pheno
+                                                               + ".out");
+    PrintWriter twoSampleOutcome = Files.getAppropriateWriter(mrPrefDirTSStr + "outcome_" + pheno
+                                                              + ".out");
+    twoSampleExposure.println(TWO_SAMPLE_HDR);
+    twoSampleOutcome.println(TWO_SAMPLE_HDR);
+
+    // exposure is info from meta file
+    // outcome is from gsp
+
+    String mrrInputFile = MARKER_REGRESSION_PREFIX + pheno + MARKER_REGRESSION_EXTEN;
+    PrintWriter markerWriter = Files.getAppropriateWriter(mrPrefDirMRStr + mrrInputFile);
+    markerWriter.println(MARKER_RESULT_HEADER);
+
+    for (String marker : markersInOrder) {
+      if (mf.metaMarkers.containsKey(marker)) { // may have been dropped by meta HitWindows
+        RegressionResult rrResult = (univariate ? study.markerRegressions
+                                                : study.multivarRegressions).get(constr, mf)
+                                                                            .get(pd, marker);
+        if (rrResult == null) {
+          continue;
+        }
+
+        MetaMarker metaMarker = mf.metaMarkers.get(marker);
+        double metaBeta = metaMarker.beta;
+        double metaSE = metaMarker.se;
+
+        double markerBeta = rrResult.getBeta();
+        double markerSE = rrResult.se;
+
+        if (!Double.isNaN(markerBeta) && !Double.isNaN(markerSE)) {
+          markerWriter.println(resultPrefix + "\t" + pheno + "\t" + marker + "\t" + metaBeta + "\t"
+                               + metaSE + "\t" + markerBeta + "\t" + markerSE);
+
+          twoSampleExposure.println(marker + "\t" + metaMarker.alleles.a1 + "\t"
+                                    + metaMarker.alleles.a2 + "\t" + metaMarker.freq + "\t"
+                                    + metaBeta + "\t" + metaSE + "\t" + metaMarker.pval
+                                    + "\tExposure");
+
+          String FREQ = ".";
+          twoSampleOutcome.println(marker + "\t" + metaMarker.alleles.a1 + "\t"
+                                   + metaMarker.alleles.a2 + "\t" + FREQ + "\t" + markerBeta + "\t"
+                                   + markerSE + "\t" + rrResult.getPval() + "\tOutcome");
+        }
+      }
+    }
+    twoSampleExposure.close();
+    twoSampleOutcome.close();
+    markerWriter.close();
+    if (markersInOrder.size() > 1) {
+      String mrrScript = writeMRRScript(mrPrefDirMR, pheno);
+      mrrScripts.add(mrrScript);
+      String tsRScript = writeTwoSampleRScript(mrPrefDirTS, pheno);
+      mrrScripts.add(tsRScript);
+    }
+  }
+
   private String writeTwoSampleRScript(File prefDir, String pheno) {
     List<String> commands = new ArrayList<>();
+    commands.add("options(repos = c(CRAN = \"https://cloud.r-project.org\"))");
     commands.add("setwd(\"" + ext.verifyDirFormat(prefDir.getAbsolutePath()) + "\")");
+    commands.add("if (!require(devtools)) {");
+    commands.add("  install.packages(\"devtools\")");
+    commands.add("}");
+    commands.add("if (!require(markdown)) {");
+    commands.add("  install.packages(\"markdown\")");
+    commands.add("}");
     commands.add("if (!require(TwoSampleMR)) {");
     commands.add("  devtools::install_github(\"MRCIEU/TwoSampleMR\")");
     commands.add("}");
@@ -3671,6 +3676,8 @@ public class GeneScorePipeline {
     commands.add("exp <- read_exposure_data(filename=\"exposure_" + pheno + ".out\", sep='\\t')");
     commands.add("out <- read_outcome_data(filename=\"outcome_" + pheno + ".out\", sep='\\t')");
     commands.add("dat <-harmonise_data(exp, out, action = 1)");
+    commands.add("mr_results <-mr(dat)");
+    commands.add("write.table(mr_results, \"MR_results.txt\", sep=\"\t\", col.names=T, row.names=T, quote=F)");
     commands.add("mr_report(dat)");
 
     commands.add("res_single <- mr_singlesnp(dat, all_method = c(\"mr_ivw\", \"mr_egger_regression\", \"mr_weighted_median\"))");
@@ -3698,11 +3705,12 @@ public class GeneScorePipeline {
     Files.writeIterable(commands, ext.verifyDirFormat(prefDir.getAbsolutePath()) + TWO_SAMPLE_PREFIX
                                   + pheno + ".R");
 
+    String setEnvCmd = Files.isWindows() ? "set" : "export";
     commands = new ArrayList<>();
     commands.add("cd " + prefDir.getAbsolutePath());
     if (rLibsDir != null) {
-      commands.add("export R_LIBS=" + rLibsDir);
-      commands.add("export R_LIBS_SITE=" + rLibsDir);
+      commands.add(setEnvCmd + " R_LIBS=" + rLibsDir);
+      commands.add(setEnvCmd + " R_LIBS_SITE=" + rLibsDir);
     } else {
       log.report("No R library directory specified, MendelianRandomization library will be installed if not present in default R library directory.");
     }
@@ -3710,7 +3718,7 @@ public class GeneScorePipeline {
                  + pheno + ".R");
 
     String runScript = ext.verifyDirFormat(prefDir.getAbsolutePath()) + TWO_SAMPLE_PREFIX + pheno
-                       + ".sh";
+                       + (Files.isWindows() ? ".bat" : ".sh");
     Files.writeIterable(commands, runScript);
     Files.chmod(runScript);
     return runScript;
@@ -3719,7 +3727,11 @@ public class GeneScorePipeline {
   private String writeMRRScript(File prefDir, String pheno) {
 
     List<String> commands = new ArrayList<>();
+    commands.add("options(repos = c(CRAN = \"https://cloud.r-project.org\"))");
     commands.add("setwd(\"" + ext.verifyDirFormat(prefDir.getAbsolutePath()) + "\")");
+    commands.add("if (!require(markdown)) {");
+    commands.add("  install.packages(\"markdown\")");
+    commands.add("}");
     commands.add("if (!require(MendelianRandomization)) {");
     commands.add("  install.packages(\"MendelianRandomization\")");
     commands.add("}");
@@ -3739,18 +3751,20 @@ public class GeneScorePipeline {
     Files.writeIterable(commands, ext.verifyDirFormat(prefDir.getAbsolutePath())
                                   + MENDELIAN_RANDOMIZATION_PREFIX + pheno + ".R");
 
+    String setEnvCmd = Files.isWindows() ? "set" : "export";
     commands = new ArrayList<>();
     commands.add("cd " + prefDir.getAbsolutePath());
     if (rLibsDir != null) {
-      commands.add("export R_LIBS=" + rLibsDir);
-      commands.add("export R_LIBS_SITE=" + rLibsDir);
+      commands.add(setEnvCmd + " R_LIBS=" + rLibsDir);
+      commands.add(setEnvCmd + " R_LIBS_SITE=" + rLibsDir);
     } else {
       log.report("No R library directory specified, MendelianRandomization library will be installed if not present in default R library directory.");
     }
     commands.add("Rscript " + MENDELIAN_RANDOMIZATION_PREFIX + pheno + ".R");
 
     String runScript = ext.verifyDirFormat(prefDir.getAbsolutePath())
-                       + MENDELIAN_RANDOMIZATION_PREFIX + pheno + ".sh";
+                       + MENDELIAN_RANDOMIZATION_PREFIX + pheno
+                       + (Files.isWindows() ? ".bat" : ".sh");
     Files.writeIterable(commands, runScript);
     Files.chmod(runScript);
     return runScript;
@@ -3846,6 +3860,7 @@ public class GeneScorePipeline {
     int[] mZ = new int[] {DEFAULT_WINDOW_MIN_SIZE_PER_SIDE};
     float[] wT = new float[] {DEFAULT_WINDOW_EXTENSION_THRESHOLD};
     double mT = DEFAULT_MIN_MISS_THRESH;
+    int cmac = 5;
 
     String[] processList = null;
     boolean process = false;
@@ -3990,6 +4005,9 @@ public class GeneScorePipeline {
         logFile = arg.split("=")[1];
       } else if (arg.equals("-overwrite")) {
         overwrite = true;
+      } else if (arg.startsWith("cmac>")) {
+        cmac = Integer.parseInt(arg.substring(5));
+
       } else {
         fail = true;
         System.err.println("Error - invalid argument: " + arg);
@@ -4012,8 +4030,8 @@ public class GeneScorePipeline {
       System.err.println("Error - argument 'workDir' must be a valid directory");
       System.exit(1);
     }
-    GeneScorePipeline gsp = new GeneScorePipeline(workDir, iT, mZ, wT, mT, runMetaHW, rLibsDir,
-                                                  plotOddsRatio, build, overwrite, log);
+    GeneScorePipeline gsp = new GeneScorePipeline(workDir, iT, mZ, wT, mT, cmac, runMetaHW,
+                                                  rLibsDir, plotOddsRatio, build, overwrite, log);
     gsp.runPipeline();
   }
 
