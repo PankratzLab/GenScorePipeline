@@ -3415,7 +3415,7 @@ public class GeneScorePipeline {
                                                                                      new AliasedFileColumn(key.subtype.nCol))
                                                           : new FixedValueColumn("NUM", ".");
 
-               String sigInMeta = String.valueOf(dataCounts.get(key.mf.metaRoot)
+               String sigInMeta = String.valueOf(dataCounts.get(key.mf.metaFile)
                                                            .get(key.c.analysisString));
                String indexVarMeta = key.isMeta() ? "."
                                                   : (key.multi ? String.valueOf(key.study.hitWindowCnts.get(key.c,
