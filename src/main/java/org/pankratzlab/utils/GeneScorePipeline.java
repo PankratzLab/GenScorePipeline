@@ -22,6 +22,7 @@ import java.util.Set;
 import java.util.StringJoiner;
 import java.util.Vector;
 import java.util.concurrent.ConcurrentHashMap;
+import java.util.concurrent.atomic.AtomicBoolean;
 import java.util.stream.Collectors;
 import java.util.stream.IntStream;
 
@@ -64,7 +65,9 @@ import org.pankratzlab.fileparser.DoubleWrapperColumn;
 import org.pankratzlab.fileparser.FileColumn;
 import org.pankratzlab.fileparser.FileParser;
 import org.pankratzlab.fileparser.FileParserFactory;
+import org.pankratzlab.fileparser.FixedValueColumn;
 import org.pankratzlab.fileparser.IndexedFileColumn;
+import org.pankratzlab.fileparser.IntegerWrapperColumn;
 import org.pankratzlab.fileparser.ParseFailureException;
 import org.pankratzlab.utils.MergeExtractPipeline.DataSource;
 import org.pankratzlab.utils.bioinformatics.ParseSNPlocations;
@@ -84,8 +87,10 @@ import com.google.common.collect.ImmutableSet;
 import com.google.common.collect.Multimap;
 import com.google.common.collect.Multiset;
 import com.google.common.collect.Sets;
+import com.google.common.collect.Streams;
 import com.google.common.collect.Table;
 import com.google.common.primitives.Doubles;
+import com.googlecode.charts4j.collect.Lists;
 
 import htsjdk.samtools.liftover.LiftOver;
 import htsjdk.samtools.util.Interval;
@@ -2271,11 +2276,10 @@ public class GeneScorePipeline {
 
   private void runHitWindows(Study study) {
     for (MetaFile mf : metaFiles) {
-      String dataFile = mf.metaRoot;
 
       for (Constraint constr : analysisConstraints) {
         String analysisKey = constr.analysisString;
-        File prefDir = new File(getDirPath(study, dataFile, analysisKey));
+        File prefDir = new File(getDirPath(study, mf, constr));
         String crossFilterFile = prefDir + "/" + CROSS_FILTERED_DATAFILE;
         String hitsFile = prefDir + FILE_PREFIX_HITS + analysisKey + FILE_EXT_OUT;
         final boolean exists = (new File(hitsFile)).exists();
@@ -2315,7 +2319,6 @@ public class GeneScorePipeline {
 
   private void extractHitMarkerData(Study study) {
     for (MetaFile mf : metaFiles) {
-      String dataFile = mf.metaRoot;
 
       for (Constraint constr : analysisConstraints) {
         if (study.data.get(constr, mf).isEmpty()) {
@@ -2323,7 +2326,7 @@ public class GeneScorePipeline {
           continue;
         }
 
-        File prefDir = new File(getDirPath(study, dataFile, constr.analysisString));
+        File prefDir = new File(getDirPath(study, mf, constr));
 
         String crossFilterFile = prefDir + "/" + CROSS_FILTERED_DATAFILE;
         String hitsFile = prefDir + FILE_PREFIX_HITS + constr.analysisString + FILE_EXT_OUT;
@@ -2388,7 +2391,7 @@ public class GeneScorePipeline {
 
         log.report("Setting up for PRS computation for {" + dataFile + "\t" + analysisKey + "}");
 
-        File prefDir = new File(getDirPath(study, dataFile, analysisKey));
+        File prefDir = new File(getDirPath(study, mf, constr));
         if (!prefDir.exists()) {
           log.report("Error - no subfolder for '" + analysisKey + "' analysis");
           continue;
@@ -3348,25 +3351,104 @@ public class GeneScorePipeline {
   }
 
   private void writeAndRunMR() {
-    List<String> mrrScripts = new ArrayList<>();
-    List<String> metaMrrScripts = new ArrayList<>();
+    Map<MR_Key, String> mrrScripts = new HashMap<>();
+    Map<MR_Key, String> metaMrrScripts = new HashMap<>();
     for (Study study : studies) {
-      mrrScripts.addAll(writeMarkerResults(study));
+      mrrScripts.putAll(writeMarkerResults(study));
     }
     if (!metaAnalyses.isEmpty()) {
-      metaMrrScripts.addAll(writeMetaMarkerResults());
+      metaMrrScripts.putAll(writeMetaMarkerResults());
     }
-    for (String script : mrrScripts) {
+    for (String script : mrrScripts.values()) {
       log.report("Executing " + script);
       CmdLine.basic(log).run(Command.basic(script));
     }
     if (!metaAnalyses.isEmpty()) {
       log.report("Executing meta-analysis MR scripts...");
-      for (String script : metaMrrScripts) {
+      for (String script : metaMrrScripts.values()) {
         log.report("Executing " + script);
         CmdLine.basic(log).run(Command.basic(script));
       }
     }
+
+    AtomicBoolean header = new AtomicBoolean(true);
+    AtomicBoolean append = new AtomicBoolean(false);
+    Streams.concat(mrrScripts.entrySet().stream(), metaMrrScripts.entrySet().stream())
+           .forEach(e -> {
+             MR_Key key = e.getKey();
+             String dir;
+             if (!key.isMeta()) {
+               dir = getDirPath(key.study, key.mf, key.c) + key.subdir + "/" + key.name;
+             } else {
+               dir = metaDir + META_DIRECTORY + "/" + key.mf.metaRoot + "/" + key.c.analysisString
+                     + "/" + key.name + "/" + key.subdir;
+             }
+             String[] resFiles = Files.list(dir, key.subtype.resultFile);
+             if (resFiles.length == 0) {
+               log.reportWarning("No MendelianRandomization results found in " + dir);
+             } else if (resFiles.length > 1) {
+               log.reportWarning("Multiple MendelianRandomization results found in " + dir);
+             } else {
+               String resFile = resFiles[0];
+
+               FileColumn<String> studyCol = new FixedValueColumn("STUDY",
+                                                                  key.isMeta() ? "MetaAnalysis"
+                                                                               : key.study.studyName);
+               FileColumn<String> fileCol = new FixedValueColumn("DATAFILE", key.mf.metaRoot);
+               FileColumn<String> phenoCol = new FixedValueColumn("PHENOTYPE", key.name);
+               FileColumn<String> constrCol = new FixedValueColumn("CONSTRAINT",
+                                                                   key.c.analysisString);
+               FileColumn<String> subtypeCol = new FixedValueColumn("SUBTYPE", key.subtype.name());
+               FileColumn<String> variateCol = new FixedValueColumn("VARIATE",
+                                                                    key.multi ? "MULTIVARIATE"
+                                                                              : "UNIVARIATE");
+
+               FileColumn<String> methodCol = new AliasedFileColumn("MR METHOD",
+                                                                    key.subtype.methodCol);
+               FileColumn<Double> betaCol = new DoubleWrapperColumn("BETA",
+                                                                    new AliasedFileColumn(key.subtype.betaCol));
+               FileColumn<Double> seCol = new DoubleWrapperColumn("SE",
+                                                                  new AliasedFileColumn(key.subtype.seCol));
+               FileColumn<Double> pCol = new DoubleWrapperColumn("P-VALUE",
+                                                                 new AliasedFileColumn(key.subtype.pCol));
+               FileColumn<?> nCol = key.subtype.hasNCol() ? new IntegerWrapperColumn("NUM",
+                                                                                     new AliasedFileColumn(key.subtype.nCol))
+                                                          : new FixedValueColumn("NUM", ".");
+
+               String sigInMeta = String.valueOf(dataCounts.get(key.mf.metaRoot)
+                                                           .get(key.c.analysisString));
+               String indexVarMeta = key.isMeta() ? "."
+                                                  : (key.multi ? String.valueOf(key.study.hitWindowCnts.get(key.c,
+                                                                                                            key.mf))
+                                                               : "1");
+               String indexVarData = key.isMeta() ? "."
+                                                  : (key.multi ? String.valueOf(key.study.hitSnpCounts.get(key.c,
+                                                                                                           key.mf))
+                                                               : "1");
+
+               FileColumn<String> nCol2 = new FixedValueColumn("#sigInMeta", sigInMeta);
+               FileColumn<String> nCol3 = new FixedValueColumn("#indexVariantsInMeta",
+                                                               indexVarMeta);
+               FileColumn<String> nCol4 = new FixedValueColumn("#indexVariantsInDataset",
+                                                               indexVarData);
+
+               List<FileColumn<?>> cols = Lists.of(studyCol, fileCol, phenoCol, constrCol,
+                                                   subtypeCol, variateCol, methodCol, betaCol,
+                                                   seCol, pCol, nCol, nCol2, nCol3, nCol4);
+
+               try {
+                 FileParserFactory.setup(dir + "/" + resFile, cols.toArray(FileColumn[]::new))
+                                  .build()
+                                  .parseToFile(GeneScorePipeline.this.metaDir + "mr_results.xln",
+                                               "\t", header.getAndSet(false),
+                                               append.getAndSet(true));
+               } catch (IOException e1) {
+                 throw new RuntimeException(e1);
+               }
+
+             }
+           });
+
   }
 
   private void writeSingleResult(String pheno, String subtype, String variate, RegressionResult rr,
@@ -3402,8 +3484,61 @@ public class GeneScorePipeline {
     return "?";
   }
 
-  private List<String> writeMetaMarkerResults() {
-    List<String> mrrScripts = new ArrayList<>();
+  enum MR_TYPE {
+    MR(".csv", "Method", "Estimate", "Std Error", "P-value", null),
+    TWO_SAMP("MR_results.txt", "method", "b", "se", "pval", "nsnp");
+
+    final String resultFile;
+    final String methodCol;
+    final String betaCol;
+    final String seCol;
+    final String pCol;
+    final String nCol;
+
+    private MR_TYPE(String resultFile, String methodCol, String betaCol, String seCol, String pCol,
+                    String nCol) {
+      this.resultFile = resultFile;
+      this.methodCol = methodCol;
+      this.betaCol = betaCol;
+      this.seCol = seCol;
+      this.pCol = pCol;
+      this.nCol = nCol;
+    }
+
+    boolean hasNCol() {
+      return nCol != null;
+    }
+
+  }
+
+  static class MR_Key {
+    Study study;
+    MetaFile mf;
+    Constraint c;
+    String name;
+    boolean multi;
+    MR_TYPE subtype;
+    String subdir;
+
+    public MR_Key(Study study, MetaFile mf, Constraint c, String name, boolean multi,
+                  MR_TYPE subtype, String subdir) {
+      this.study = study;
+      this.mf = mf;
+      this.c = c;
+      this.name = name;
+      this.multi = multi;
+      this.subtype = subtype;
+      this.subdir = subdir;
+    }
+
+    boolean isMeta() {
+      return study == null;
+    }
+
+  }
+
+  private Map<MR_Key, String> writeMetaMarkerResults() {
+    Map<MR_Key, String> mrrScripts = new HashMap<>();
 
     for (MetaFile mf : metaFiles) {
       String dataFile = mf.metaRoot;
@@ -3476,10 +3611,14 @@ public class GeneScorePipeline {
           twoSampleOutcome.close();
           markerWriter.close();
           if (foundMkrs > 1) {
+            MR_Key mrKey = new MR_Key(null, mf, constr, ma.name, false, MR_TYPE.MR, "mr");
             String mrrScript = writeMRRScript(mrPrefDirMR, ma.name);
-            mrrScripts.add(mrrScript);
+            mrrScripts.put(mrKey, mrrScript);
+
+            MR_Key twoSampKey = new MR_Key(null, mf, constr, ma.name, false, MR_TYPE.TWO_SAMP,
+                                           "two-sample");
             String tsRScript = writeTwoSampleRScript(mrPrefDirTS, ma.name);
-            mrrScripts.add(tsRScript);
+            mrrScripts.put(twoSampKey, tsRScript);
           }
         }
 
@@ -3489,13 +3628,14 @@ public class GeneScorePipeline {
     return mrrScripts;
   }
 
-  private List<String> writeMarkerResults(Study study) {
-    List<String> mrrScripts = new ArrayList<>();
+  private Map<MR_Key, String> writeMarkerResults(Study study) {
+    Map<MR_Key, String> mrrScripts = new HashMap<>();
+
     for (MetaFile mf : metaFiles) {
       String dataFile = mf.metaRoot;
       for (Constraint constr : analysisConstraints) {
         String analysisKey = constr.analysisString;
-        File prefDir = new File(getDirPath(study, dataFile, analysisKey));
+        File prefDir = new File(getDirPath(study, mf, constr));
         if (!prefDir.exists()) {
           log.report("Error - no subfolder for '" + analysisKey + "' analysis");
           continue;
@@ -3519,10 +3659,8 @@ public class GeneScorePipeline {
 
         for (int i = 0; i < study.phenoFiles.size(); i++) {
           String pheno = study.phenoFiles.get(i);
-          writeRScripts(study, mrrScripts, mf, dataFile, constr, analysisKey, resultPrefix,
-                        markersInOrder, pheno, true);
-          writeRScripts(study, mrrScripts, mf, dataFile, constr, analysisKey, resultPrefix,
-                        markersInOrder, pheno, false);
+          writeRScripts(study, mrrScripts, mf, constr, resultPrefix, markersInOrder, pheno, true);
+          writeRScripts(study, mrrScripts, mf, constr, resultPrefix, markersInOrder, pheno, false);
         }
 
         PrintWriter forestWriter = Files.getAppropriateWriter(prefDir + "/forest_input.txt");
@@ -3585,19 +3723,20 @@ public class GeneScorePipeline {
     return mrrScripts;
   }
 
-  private void writeRScripts(Study study, List<String> mrrScripts, MetaFile mf, String dataFile,
-                             Constraint constr, String analysisKey, String resultPrefix,
-                             List<String> markersInOrder, String pheno, boolean univariate) {
+  private void writeRScripts(Study study, Map<MR_Key, String> mrrScripts, MetaFile mf,
+                             Constraint constr, String resultPrefix, List<String> markersInOrder,
+                             String pheno, boolean univariate) {
     PhenoData pd = study.phenoData.get(pheno);
 
     String var = univariate ? "univar" : "multivar";
+    String subdir_mr = "mr/mr_" + var;
+    String subdir_2s = "mr/two-sample_" + var;
 
-    String mrPrefDirMRStr = getDirPath(study, dataFile, analysisKey) + "mr/mr_" + var + "/" + pheno
-                            + "/";
+    String mrPrefDirMRStr = getDirPath(study, mf, constr) + subdir_mr + "/" + pheno + "/";
+
     File mrPrefDirMR = new File(mrPrefDirMRStr);
     mrPrefDirMR.mkdirs();
-    String mrPrefDirTSStr = getDirPath(study, dataFile, analysisKey) + "mr/two-sample_" + var + "/"
-                            + pheno + "/";
+    String mrPrefDirTSStr = getDirPath(study, mf, constr) + subdir_2s + "/" + pheno + "/";
     File mrPrefDirTS = new File(mrPrefDirTSStr);
     mrPrefDirTS.mkdirs();
 
@@ -3651,10 +3790,14 @@ public class GeneScorePipeline {
     twoSampleOutcome.close();
     markerWriter.close();
     if (markersInOrder.size() > 1) {
+      MR_Key mrKey = new MR_Key(study, mf, constr, pheno, !univariate, MR_TYPE.MR, subdir_mr);
       String mrrScript = writeMRRScript(mrPrefDirMR, pheno);
-      mrrScripts.add(mrrScript);
+      mrrScripts.put(mrKey, mrrScript);
+
+      MR_Key twoSKey = new MR_Key(study, mf, constr, pheno, !univariate, MR_TYPE.TWO_SAMP,
+                                  subdir_2s);
       String tsRScript = writeTwoSampleRScript(mrPrefDirTS, pheno);
-      mrrScripts.add(tsRScript);
+      mrrScripts.put(twoSKey, tsRScript);
     }
   }
 
@@ -3677,7 +3820,7 @@ public class GeneScorePipeline {
     commands.add("out <- read_outcome_data(filename=\"outcome_" + pheno + ".out\", sep='\\t')");
     commands.add("dat <-harmonise_data(exp, out, action = 1)");
     commands.add("mr_results <-mr(dat)");
-    commands.add("write.table(mr_results, \"MR_results.txt\", sep=\"\t\", col.names=T, row.names=T, quote=F)");
+    commands.add("write.table(mr_results, \"MR_results.txt\", sep=\"\t\", col.names=T, row.names=F, quote=F)");
     commands.add("mr_report(dat)");
 
     commands.add("res_single <- mr_singlesnp(dat, all_method = c(\"mr_ivw\", \"mr_egger_regression\", \"mr_weighted_median\"))");
@@ -3770,8 +3913,8 @@ public class GeneScorePipeline {
     return runScript;
   }
 
-  private String getDirPath(Study study, String dataFile, String filePrefixKey) {
-    return study.studyDir + dataFile + "/" + filePrefixKey + "/";
+  private String getDirPath(Study study, MetaFile metaFile, Constraint constr) {
+    return study.studyDir + metaFile.metaRoot + "/" + constr.analysisString + "/";
   }
 
   public static final String COMMAND_GENESCORE = "geneScore";
