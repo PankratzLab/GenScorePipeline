@@ -15,23 +15,8 @@
             <url></url>
         </developer>
         <developer>
-            <id>avakel</id>
-            <name>Ava Kelley</name>
-            <url></url>
-        </developer>
-        <developer>
-            <id>hinerm</id>
-            <name>Mark Hiner</name>
-            <url></url>
-        </developer>
-        <developer>
             <id>rcoleb</id>
             <name>Ben Cole</name>
-            <url></url>
-        </developer>
-        <developer>
-            <id>mstim</id>
-            <name>Mary Rachel Stimson</name>
             <url></url>
         </developer>
     </developers>
