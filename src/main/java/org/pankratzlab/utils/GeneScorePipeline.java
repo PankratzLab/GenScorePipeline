@@ -4148,9 +4148,8 @@ public class GeneScorePipeline {
         logFile = arg.split("=")[1];
       } else if (arg.equals("-overwrite")) {
         overwrite = true;
-      } else if (arg.startsWith("cmac>")) {
-        cmac = Integer.parseInt(arg.substring(5));
-
+      } else if (arg.startsWith("cmac=")) {
+        cmac = ext.parseIntArg(arg);
       } else {
         fail = true;
         System.err.println("Error - invalid argument: " + arg);
