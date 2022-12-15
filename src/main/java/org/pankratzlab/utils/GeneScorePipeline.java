@@ -327,6 +327,8 @@ public class GeneScorePipeline {
     Table<Constraint, MetaFile, Table<PhenoData, String, RegressionResult>> markerRegressions = HashBasedTable.create();
     // constraint -> datafile -> phenofile -> marker
     Table<Constraint, MetaFile, Table<PhenoData, String, RegressionResult>> multivarRegressions = HashBasedTable.create();
+    // constraint -> datafile -> phenofile -> marker
+    Table<Constraint, MetaFile, Table<PhenoData, String, Boolean>> markerMACPassing = HashBasedTable.create();
     // constraint -> datafile
     Table<Constraint, MetaFile, double[]> scores = HashBasedTable.create();
     // constraint -> datafile
@@ -1301,6 +1303,7 @@ public class GeneScorePipeline {
           study.regressions.put(constr, mf, new HashMap<>());
           study.markerRegressions.put(constr, mf, HashBasedTable.create());
           study.multivarRegressions.put(constr, mf, HashBasedTable.create());
+          study.markerMACPassing.put(constr, mf, HashBasedTable.create());
           study.indivMetaScores.put(constr, mf, new HashMap<>());
         }
       }
@@ -2658,19 +2661,31 @@ public class GeneScorePipeline {
               // TODO probably log?
               continue;
             }
+
+            double sum = 0;
             Map<String, Double> dosages = new HashMap<>();
             for (int s = 0; s < ids.length; s++) {
               final String key = ids[s][0] + "\t" + ids[s][1];
               dosages.put(key, mkrDosages[s][mkrInd]);
               indivAllMkrs.get(key)[indMkr] = mkrDosages[s][mkrInd];
+              sum += mkrDosages[s][mkrInd];
             }
+
+            double DOSAGE_THRESHOLD = cmacThresh;
+            double DOSAGE_MAX_THRESHOLD = (pd.indivs.size() * 2) - cmacThresh;
+
+            study.markerMACPassing.get(constr, mf)
+                                  .put(pd, marker,
+                                       sum > DOSAGE_THRESHOLD && sum < DOSAGE_MAX_THRESHOLD);
 
             RegressionResult rrResultPerMkr = actualRegression(dosages, null, pd);
             study.markerRegressions.get(constr, mf).put(pd, marker, rrResultPerMkr);
           }
 
           // run regression with all markers from indivAllMarkers
-          Map<String, RegressionResult> rrResultMulti = actualRegressionMultivar(indivAllMkrs,
+          Map<String, RegressionResult> rrResultMulti = actualRegressionMultivar(study.markerMACPassing.get(constr,
+                                                                                                            mf),
+                                                                                 indivAllMkrs,
                                                                                  mkrNames, null,
                                                                                  pd);
           rrResultMulti.forEach((s, rr1) -> {
@@ -2681,7 +2696,8 @@ public class GeneScorePipeline {
     }
   }
 
-  private Map<String, RegressionResult> actualRegressionMultivar(Map<String, double[]> scoreData,
+  private Map<String, RegressionResult> actualRegressionMultivar(Table<PhenoData, String, Boolean> macPass,
+                                                                 Map<String, double[]> scoreData,
                                                                  List<String> scoreNames,
                                                                  PrintWriter writer, PhenoData pd) {
     ArrayList<Double> depData = new ArrayList<>();
@@ -2737,17 +2753,10 @@ public class GeneScorePipeline {
       }
     }
 
-    double DOSAGE_THRESHOLD = cmacThresh;
-    double DOSAGE_MAX_THRESHOLD = (pd.indivs.size() * 2) - cmacThresh;
-
     List<Integer> removeCols = new ArrayList<>();
-    for (int c = 0; c < indepData.get(0).length; c++) {
-      double sum = 0;
-      for (int r = 0; r < indepData.size(); r++) {
-        sum += indepData.get(r)[c];
-      }
-      if (sum < DOSAGE_THRESHOLD || sum > DOSAGE_MAX_THRESHOLD) {
-        removeCols.add(c);
+    for (int i = 0; i < scoreNames.size(); i++) {
+      if (!macPass.get(pd, scoreNames.get(i))) {
+        removeCols.add(i);
       }
     }
     if (removeCols.size() > 0) {
@@ -3371,84 +3380,82 @@ public class GeneScorePipeline {
       }
     }
 
+    parseMRResults(mrrScripts, metaMrrScripts);
+
+  }
+
+  private void parseMRResults(Map<MR_Key, String> mrrScripts, Map<MR_Key, String> metaMrrScripts) {
     AtomicBoolean header = new AtomicBoolean(true);
     AtomicBoolean append = new AtomicBoolean(false);
-    Streams.concat(mrrScripts.entrySet().stream(), metaMrrScripts.entrySet().stream())
-           .forEach(e -> {
-             MR_Key key = e.getKey();
-             String dir;
-             if (!key.isMeta()) {
-               dir = getDirPath(key.study, key.mf, key.c) + key.subdir + "/" + key.name;
-             } else {
-               dir = metaDir + META_DIRECTORY + "/" + key.mf.metaRoot + "/" + key.c.analysisString
-                     + "/" + key.name + "/" + key.subdir;
-             }
-             String[] resFiles = Files.list(dir, key.subtype.resultFile);
-             if (resFiles.length == 0) {
-               log.reportWarning("No MendelianRandomization results found in " + dir);
-             } else if (resFiles.length > 1) {
-               log.reportWarning("Multiple MendelianRandomization results found in " + dir);
-             } else {
-               String resFile = resFiles[0];
+    Streams.concat(mrrScripts.keySet().stream(), metaMrrScripts.keySet().stream()).forEach(key -> {
+      parseMRResultFile(header, append, key);
+    });
+  }
 
-               FileColumn<String> studyCol = new FixedValueColumn("STUDY",
-                                                                  key.isMeta() ? "MetaAnalysis"
-                                                                               : key.study.studyName);
-               FileColumn<String> fileCol = new FixedValueColumn("DATAFILE", key.mf.metaRoot);
-               FileColumn<String> phenoCol = new FixedValueColumn("PHENOTYPE", key.name);
-               FileColumn<String> constrCol = new FixedValueColumn("CONSTRAINT",
-                                                                   key.c.analysisString);
-               FileColumn<String> subtypeCol = new FixedValueColumn("SUBTYPE", key.subtype.name());
-               FileColumn<String> variateCol = new FixedValueColumn("VARIATE",
-                                                                    key.multi ? "MULTIVARIATE"
-                                                                              : "UNIVARIATE");
+  private void parseMRResultFile(AtomicBoolean header, AtomicBoolean append, MR_Key key) {
+    String dir;
+    if (key.isMeta()) {
+      dir = metaDir + META_DIRECTORY + "/" + key.mf.metaRoot + "/" + key.c.analysisString + "/"
+            + key.name + "/" + key.subdir;
+    } else {
+      dir = getDirPath(key.study, key.mf, key.c) + key.subdir + "/" + key.name;
+    }
+    String[] resFiles = Files.list(dir, key.subtype.resultFile);
+    if (resFiles.length == 0) {
+      log.reportWarning("No MendelianRandomization results found in " + dir);
+    } else if (resFiles.length > 1) {
+      log.reportWarning("Multiple MendelianRandomization results found in " + dir);
+    } else {
+      String resFile = resFiles[0];
 
-               FileColumn<String> methodCol = new AliasedFileColumn("MR METHOD",
-                                                                    key.subtype.methodCol);
-               FileColumn<Double> betaCol = new DoubleWrapperColumn("BETA",
-                                                                    new AliasedFileColumn(key.subtype.betaCol));
-               FileColumn<Double> seCol = new DoubleWrapperColumn("SE",
-                                                                  new AliasedFileColumn(key.subtype.seCol));
-               FileColumn<Double> pCol = new DoubleWrapperColumn("P-VALUE",
-                                                                 new AliasedFileColumn(key.subtype.pCol));
-               FileColumn<?> nCol = key.subtype.hasNCol() ? new IntegerWrapperColumn("NUM",
-                                                                                     new AliasedFileColumn(key.subtype.nCol))
-                                                          : new FixedValueColumn("NUM", ".");
+      FileColumn<String> studyCol = new FixedValueColumn("STUDY",
+                                                         key.isMeta() ? "MetaAnalysis"
+                                                                      : key.study.studyName);
+      FileColumn<String> fileCol = new FixedValueColumn("DATAFILE", key.mf.metaRoot);
+      FileColumn<String> phenoCol = new FixedValueColumn("PHENOTYPE", key.name);
+      FileColumn<String> constrCol = new FixedValueColumn("CONSTRAINT", key.c.analysisString);
+      FileColumn<String> subtypeCol = new FixedValueColumn("SUBTYPE", key.subtype.name());
+      FileColumn<String> variateCol = new FixedValueColumn("VARIATE", key.multi ? "MULTIVARIATE"
+                                                                                : "UNIVARIATE");
 
-               String sigInMeta = String.valueOf(dataCounts.get(key.mf.metaFile)
-                                                           .get(key.c.analysisString));
-               String indexVarMeta = key.isMeta() ? "."
-                                                  : (key.multi ? String.valueOf(key.study.hitWindowCnts.get(key.c,
-                                                                                                            key.mf))
-                                                               : "1");
-               String indexVarData = key.isMeta() ? "."
-                                                  : (key.multi ? String.valueOf(key.study.hitSnpCounts.get(key.c,
-                                                                                                           key.mf))
-                                                               : "1");
+      FileColumn<String> methodCol = new AliasedFileColumn("MR METHOD", key.subtype.methodCol);
+      FileColumn<Double> betaCol = new DoubleWrapperColumn("BETA",
+                                                           new AliasedFileColumn(key.subtype.betaCol));
+      FileColumn<Double> seCol = new DoubleWrapperColumn("SE",
+                                                         new AliasedFileColumn(key.subtype.seCol));
+      FileColumn<Double> pCol = new DoubleWrapperColumn("P-VALUE",
+                                                        new AliasedFileColumn(key.subtype.pCol));
+      FileColumn<?> nCol = key.subtype.hasNCol() ? new IntegerWrapperColumn("NUM",
+                                                                            new AliasedFileColumn(key.subtype.nCol))
+                                                 : new FixedValueColumn("NUM", ".");
 
-               FileColumn<String> nCol2 = new FixedValueColumn("#sigInMeta", sigInMeta);
-               FileColumn<String> nCol3 = new FixedValueColumn("#indexVariantsInMeta",
-                                                               indexVarMeta);
-               FileColumn<String> nCol4 = new FixedValueColumn("#indexVariantsInDataset",
-                                                               indexVarData);
+      String sigInMeta = String.valueOf(dataCounts.get(key.mf.metaFile).get(key.c.analysisString));
+      String indexVarMeta = key.isMeta() ? "."
+                                         : (key.multi ? String.valueOf(key.study.hitWindowCnts.get(key.c,
+                                                                                                   key.mf))
+                                                      : "1");
+      String indexVarData = key.isMeta() ? "."
+                                         : (key.multi ? String.valueOf(key.study.hitSnpCounts.get(key.c,
+                                                                                                  key.mf))
+                                                      : "1");
 
-               List<FileColumn<?>> cols = Lists.of(studyCol, fileCol, phenoCol, constrCol,
-                                                   subtypeCol, variateCol, methodCol, betaCol,
-                                                   seCol, pCol, nCol, nCol2, nCol3, nCol4);
+      FileColumn<String> nCol2 = new FixedValueColumn("#sigInMeta", sigInMeta);
+      FileColumn<String> nCol3 = new FixedValueColumn("#indexVariantsInMeta", indexVarMeta);
+      FileColumn<String> nCol4 = new FixedValueColumn("#indexVariantsInDataset", indexVarData);
 
-               try {
-                 FileParserFactory.setup(dir + "/" + resFile, cols.toArray(FileColumn[]::new))
-                                  .build()
-                                  .parseToFile(GeneScorePipeline.this.metaDir + "mr_results.xln",
-                                               "\t", header.getAndSet(false),
-                                               append.getAndSet(true));
-               } catch (IOException e1) {
-                 throw new RuntimeException(e1);
-               }
+      List<FileColumn<?>> cols = Lists.of(studyCol, fileCol, phenoCol, constrCol, subtypeCol,
+                                          variateCol, methodCol, betaCol, seCol, pCol, nCol, nCol2,
+                                          nCol3, nCol4);
 
-             }
-           });
+      try {
+        FileParserFactory.setup(dir + "/" + resFile, cols.toArray(FileColumn[]::new)).build()
+                         .parseToFile(GeneScorePipeline.this.metaDir + "mr_results.xln", "\t",
+                                      header.getAndSet(false), append.getAndSet(true));
+      } catch (IOException e1) {
+        throw new RuntimeException(e1);
+      }
 
+    }
   }
 
   private void writeSingleResult(String pheno, String subtype, String variate, RegressionResult rr,
@@ -3547,85 +3554,93 @@ public class GeneScorePipeline {
         for (MetaAnalysis ma : metaAnalyses) {
           String prefDir = metaDir + "/" + META_DIRECTORY + "/" + dataFile + "/" + analysisKey + "/"
                            + ma.name + "/";
-
-          MetaAnalysisSummary summary = summaryResults.get(constr, mf).get(ma);
-
-          String mrPrefDirMRStr = prefDir + "/mr/";
-          File mrPrefDirMR = new File(mrPrefDirMRStr);
-          mrPrefDirMR.mkdirs();
-          String mrPrefDirTSStr = prefDir + "/two-sample/";
-          File mrPrefDirTS = new File(mrPrefDirTSStr);
-          mrPrefDirTS.mkdirs();
-
-          PrintWriter twoSampleExposure = Files.getAppropriateWriter(mrPrefDirTSStr + "exposure_"
-                                                                     + ma.name + ".out");
-          PrintWriter twoSampleOutcome = Files.getAppropriateWriter(mrPrefDirTSStr + "outcome_"
-                                                                    + ma.name + ".out");
-          twoSampleExposure.println(TWO_SAMPLE_HDR);
-          twoSampleOutcome.println(TWO_SAMPLE_HDR);
-
-          // exposure is info from meta file
-          // outcome is from gsp
-
-          String mrrInputFile = MARKER_REGRESSION_PREFIX + ma.name + MARKER_REGRESSION_EXTEN;
-          PrintWriter markerWriter = Files.getAppropriateWriter(mrPrefDirMRStr + mrrInputFile);
-          markerWriter.println(MARKER_RESULT_HEADER);
-
-          String resultPrefix = new StringJoiner("\t").add("META").add(dataFile)
-                                                      .add(ext.formSciNot(constr.indexThreshold, 5,
-                                                                          false))
-                                                      .toString();
-
-          int foundMkrs = 0;
-          for (String marker : mf.metaMarkers.keySet()) {
-            if (!summary.perMarkerResultsUni.containsKey(marker)) {
-              continue;
-            }
-            foundMkrs++;
-
-            MetaMarker metaMarker = mf.metaMarkers.get(marker);
-            double metaBeta = metaMarker.beta;
-            double metaSE = metaMarker.se;
-
-            double markerBeta = summary.perMarkerResultsUni.get(marker).beta;
-            double markerSE = summary.perMarkerResultsUni.get(marker).se;
-
-            if (!Double.isNaN(markerBeta) && !Double.isNaN(markerSE)) {
-              markerWriter.println(resultPrefix + "\t" + ma.name + "\t" + marker + "\t" + metaBeta
-                                   + "\t" + metaSE + "\t" + markerBeta + "\t" + markerSE);
-
-              twoSampleExposure.println(marker + "\t" + metaMarker.alleles.a1 + "\t"
-                                        + metaMarker.alleles.a2 + "\t" + metaMarker.freq + "\t"
-                                        + metaBeta + "\t" + metaSE + "\t" + metaMarker.pval
-                                        + "\tExposure");
-
-              String FREQ = ".";
-              twoSampleOutcome.println(marker + "\t" + metaMarker.alleles.a1 + "\t"
-                                       + metaMarker.alleles.a2 + "\t" + FREQ + "\t" + markerBeta
-                                       + "\t" + markerSE + "\t"
-                                       + summary.perMarkerResultsUni.get(marker).pval
-                                       + "\tOutcome");
-            }
-          }
-          twoSampleExposure.close();
-          twoSampleOutcome.close();
-          markerWriter.close();
-          if (foundMkrs > 1) {
-            MR_Key mrKey = new MR_Key(null, mf, constr, ma.name, false, MR_TYPE.MR, "mr");
-            String mrrScript = writeMRRScript(mrPrefDirMR, ma.name);
-            mrrScripts.put(mrKey, mrrScript);
-
-            MR_Key twoSampKey = new MR_Key(null, mf, constr, ma.name, false, MR_TYPE.TWO_SAMP,
-                                           "two-sample");
-            String tsRScript = writeTwoSampleRScript(mrPrefDirTS, ma.name);
-            mrrScripts.put(twoSampKey, tsRScript);
-          }
+          writeMetaRScripts(mrrScripts, mf, dataFile, constr, ma, prefDir, true);
+          writeMetaRScripts(mrrScripts, mf, dataFile, constr, ma, prefDir, false);
         }
 
       }
     }
 
     return mrrScripts;
+  }
+
+  private void writeMetaRScripts(Map<MR_Key, String> mrrScripts, MetaFile mf, String dataFile,
+                                 Constraint constr, MetaAnalysis ma, String prefDir,
+                                 boolean univar) {
+    MetaAnalysisSummary summary = summaryResults.get(constr, mf).get(ma);
+
+    String mrPrefDirMRStr = prefDir + "/mr_" + (univar ? "univar" : "multivar") + "/";
+    File mrPrefDirMR = new File(mrPrefDirMRStr);
+    mrPrefDirMR.mkdirs();
+    String mrPrefDirTSStr = prefDir + "/two-sample_" + (univar ? "univar" : "multivar") + "/";
+    File mrPrefDirTS = new File(mrPrefDirTSStr);
+    mrPrefDirTS.mkdirs();
+
+    PrintWriter twoSampleExposure = Files.getAppropriateWriter(mrPrefDirTSStr + "exposure_"
+                                                               + ma.name + ".out");
+    PrintWriter twoSampleOutcome = Files.getAppropriateWriter(mrPrefDirTSStr + "outcome_" + ma.name
+                                                              + ".out");
+    twoSampleExposure.println(TWO_SAMPLE_HDR);
+    twoSampleOutcome.println(TWO_SAMPLE_HDR);
+
+    // exposure is info from meta file
+    // outcome is from gsp
+
+    String mrrInputFile = MARKER_REGRESSION_PREFIX + ma.name + MARKER_REGRESSION_EXTEN;
+    PrintWriter markerWriter = Files.getAppropriateWriter(mrPrefDirMRStr + mrrInputFile);
+    markerWriter.println(MARKER_RESULT_HEADER);
+
+    String resultPrefix = new StringJoiner("\t").add("META").add(dataFile)
+                                                .add(ext.formSciNot(constr.indexThreshold, 5,
+                                                                    false))
+                                                .toString();
+
+    int foundMkrs = 0;
+    for (String marker : mf.metaMarkers.keySet()) {
+      final Map<String, MetaAnalysisResult> perMarkerResults = univar ? summary.perMarkerResultsUni
+                                                                      : summary.perMarkerResultsMulti;
+      if (!perMarkerResults.containsKey(marker)) {
+        continue;
+      }
+
+      foundMkrs++;
+
+      MetaMarker metaMarker = mf.metaMarkers.get(marker);
+      double metaBeta = metaMarker.beta;
+      double metaSE = metaMarker.se;
+
+      double markerBeta = perMarkerResults.get(marker).beta;
+      double markerSE = perMarkerResults.get(marker).se;
+
+      if (!Double.isNaN(markerBeta) && !Double.isNaN(markerSE)) {
+        markerWriter.println(resultPrefix + "\t" + ma.name + "\t" + marker + "\t" + metaBeta + "\t"
+                             + metaSE + "\t" + markerBeta + "\t" + markerSE);
+
+        twoSampleExposure.println(marker + "\t" + metaMarker.alleles.a1 + "\t"
+                                  + metaMarker.alleles.a2 + "\t" + metaMarker.freq + "\t" + metaBeta
+                                  + "\t" + metaSE + "\t" + metaMarker.pval + "\tExposure");
+
+        String FREQ = ".";
+        twoSampleOutcome.println(marker + "\t" + metaMarker.alleles.a1 + "\t"
+                                 + metaMarker.alleles.a2 + "\t" + FREQ + "\t" + markerBeta + "\t"
+                                 + markerSE + "\t" + perMarkerResults.get(marker).pval
+                                 + "\tOutcome");
+      }
+    }
+    twoSampleExposure.close();
+    twoSampleOutcome.close();
+    markerWriter.close();
+    if (foundMkrs > 1) {
+      MR_Key mrKey = new MR_Key(null, mf, constr, ma.name, false, MR_TYPE.MR,
+                                "mr_" + (univar ? "univar" : "multivar"));
+      String mrrScript = writeMRRScript(mrPrefDirMR, ma.name);
+      mrrScripts.put(mrKey, mrrScript);
+
+      MR_Key twoSampKey = new MR_Key(null, mf, constr, ma.name, false, MR_TYPE.TWO_SAMP,
+                                     "two-sample_" + (univar ? "univar" : "multivar"));
+      String tsRScript = writeTwoSampleRScript(mrPrefDirTS, ma.name);
+      mrrScripts.put(twoSampKey, tsRScript);
+    }
   }
 
   private Map<MR_Key, String> writeMarkerResults(Study study) {
@@ -3754,12 +3769,17 @@ public class GeneScorePipeline {
     PrintWriter markerWriter = Files.getAppropriateWriter(mrPrefDirMRStr + mrrInputFile);
     markerWriter.println(MARKER_RESULT_HEADER);
 
+    int writtenMarkers = 0;
     for (String marker : markersInOrder) {
       if (mf.metaMarkers.containsKey(marker)) { // may have been dropped by meta HitWindows
         RegressionResult rrResult = (univariate ? study.markerRegressions
                                                 : study.multivarRegressions).get(constr, mf)
                                                                             .get(pd, marker);
         if (rrResult == null) {
+          continue;
+        }
+        if (!study.markerMACPassing.get(constr, mf).get(pd, marker)) {
+          // filtered by cmac
           continue;
         }
 
@@ -3771,6 +3791,7 @@ public class GeneScorePipeline {
         double markerSE = rrResult.se;
 
         if (!Double.isNaN(markerBeta) && !Double.isNaN(markerSE)) {
+          writtenMarkers++;
           markerWriter.println(resultPrefix + "\t" + pheno + "\t" + marker + "\t" + metaBeta + "\t"
                                + metaSE + "\t" + markerBeta + "\t" + markerSE);
 
@@ -3789,7 +3810,7 @@ public class GeneScorePipeline {
     twoSampleExposure.close();
     twoSampleOutcome.close();
     markerWriter.close();
-    if (markersInOrder.size() > 1) {
+    if (writtenMarkers > 0) {
       MR_Key mrKey = new MR_Key(study, mf, constr, pheno, !univariate, MR_TYPE.MR, subdir_mr);
       String mrrScript = writeMRRScript(mrPrefDirMR, pheno);
       mrrScripts.put(mrKey, mrrScript);
