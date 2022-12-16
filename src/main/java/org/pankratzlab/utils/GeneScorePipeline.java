@@ -2668,15 +2668,16 @@ public class GeneScorePipeline {
               final String key = ids[s][0] + "\t" + ids[s][1];
               dosages.put(key, mkrDosages[s][mkrInd]);
               indivAllMkrs.get(key)[indMkr] = mkrDosages[s][mkrInd];
-              sum += mkrDosages[s][mkrInd];
+              if (pd.indivs.containsKey(key)) {
+                sum += mkrDosages[s][mkrInd];
+              }
             }
 
             double DOSAGE_THRESHOLD = cmacThresh;
             double DOSAGE_MAX_THRESHOLD = (pd.indivs.size() * 2) - cmacThresh;
 
-            study.markerMACPassing.get(constr, mf)
-                                  .put(pd, marker,
-                                       sum > DOSAGE_THRESHOLD && sum < DOSAGE_MAX_THRESHOLD);
+            boolean pass = sum > DOSAGE_THRESHOLD && sum < DOSAGE_MAX_THRESHOLD;
+            study.markerMACPassing.get(constr, mf).put(pd, marker, pass);
 
             RegressionResult rrResultPerMkr = actualRegression(dosages, null, pd);
             study.markerRegressions.get(constr, mf).put(pd, marker, rrResultPerMkr);
@@ -3409,7 +3410,7 @@ public class GeneScorePipeline {
       String resFile = resFiles[0];
 
       FileColumn<String> studyCol = new FixedValueColumn("STUDY",
-                                                         key.isMeta() ? "MetaAnalysis"
+                                                         key.isMeta() ? "META"
                                                                       : key.study.studyName);
       FileColumn<String> fileCol = new FixedValueColumn("DATAFILE", key.mf.metaRoot);
       FileColumn<String> phenoCol = new FixedValueColumn("PHENOTYPE", key.name);
@@ -3631,12 +3632,12 @@ public class GeneScorePipeline {
     twoSampleOutcome.close();
     markerWriter.close();
     if (foundMkrs > 1) {
-      MR_Key mrKey = new MR_Key(null, mf, constr, ma.name, false, MR_TYPE.MR,
+      MR_Key mrKey = new MR_Key(null, mf, constr, ma.name, !univar, MR_TYPE.MR,
                                 "mr_" + (univar ? "univar" : "multivar"));
       String mrrScript = writeMRRScript(mrPrefDirMR, ma.name);
       mrrScripts.put(mrKey, mrrScript);
 
-      MR_Key twoSampKey = new MR_Key(null, mf, constr, ma.name, false, MR_TYPE.TWO_SAMP,
+      MR_Key twoSampKey = new MR_Key(null, mf, constr, ma.name, !univar, MR_TYPE.TWO_SAMP,
                                      "two-sample_" + (univar ? "univar" : "multivar"));
       String tsRScript = writeTwoSampleRScript(mrPrefDirTS, ma.name);
       mrrScripts.put(twoSampKey, tsRScript);
