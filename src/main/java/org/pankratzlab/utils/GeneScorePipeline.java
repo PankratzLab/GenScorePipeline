@@ -3323,16 +3323,18 @@ public class GeneScorePipeline {
 
             final MetaAnalysisResult result = summary.prsResult;
 
-            String linStr = formResultLine(ma, dataFile, constr, result, "PRS");
+            String linStr = formResultLine(ma, dataFile, constr, result, "PRS", true);
 
             writer.println(linStr);
 
             for (Entry<String, MetaAnalysisResult> res : summary.perMarkerResultsUni.entrySet()) {
-              writer.println(formResultLine(ma, dataFile, constr, res.getValue(), res.getKey()));
+              writer.println(formResultLine(ma, dataFile, constr, res.getValue(), res.getKey(),
+                                            true));
             }
 
             for (Entry<String, MetaAnalysisResult> res : summary.perMarkerResultsMulti.entrySet()) {
-              writer.println(formResultLine(ma, dataFile, constr, res.getValue(), res.getKey()));
+              writer.println(formResultLine(ma, dataFile, constr, res.getValue(), res.getKey(),
+                                            false));
             }
 
           }
@@ -3342,14 +3344,14 @@ public class GeneScorePipeline {
   }
 
   private String formResultLine(MetaAnalysis ma, String dataFile, Constraint constr,
-                                final MetaAnalysisResult result, String name) {
+                                final MetaAnalysisResult result, String name, boolean univar) {
     StringJoiner line = new StringJoiner("\t");
     line.add("META");
     line.add(dataFile);
     line.add(ext.formSciNot(constr.indexThreshold, 5, false));
     line.add(ma.name);
     line.add(name);
-    line.add("UNIVARIATE");
+    line.add(univar ? "UNIVARIATE" : "MULTIVARIATE");
     line.add(".");
     line.add(".");
     line.add(".");
