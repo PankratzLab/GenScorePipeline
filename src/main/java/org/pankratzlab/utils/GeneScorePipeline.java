@@ -2679,8 +2679,10 @@ public class GeneScorePipeline {
             boolean pass = sum > DOSAGE_THRESHOLD && sum < DOSAGE_MAX_THRESHOLD;
             study.markerMACPassing.get(constr, mf).put(pd, marker, pass);
 
-            RegressionResult rrResultPerMkr = actualRegression(dosages, null, pd);
-            study.markerRegressions.get(constr, mf).put(pd, marker, rrResultPerMkr);
+            if (pass) {
+              RegressionResult rrResultPerMkr = actualRegression(dosages, null, pd);
+              study.markerRegressions.get(constr, mf).put(pd, marker, rrResultPerMkr);
+            }
           }
 
           // run regression with all markers from indivAllMarkers
@@ -2754,14 +2756,17 @@ public class GeneScorePipeline {
       }
     }
 
+    Set<String> removedMkrs = new HashSet<>();
     List<Integer> removeCols = new ArrayList<>();
     for (int i = 0; i < scoreNames.size(); i++) {
       if (!macPass.get(pd, scoreNames.get(i))) {
+        removedMkrs.add(scoreNames.get(i));
         removeCols.add(i);
       }
     }
     if (removeCols.size() > 0) {
-      log.reportWarning("Removing " + removeCols.size() + " low-variance independent variables...");
+      log.reportWarning("Removing " + removeCols.size() + " low-variance independent variables ["
+                        + ArrayUtils.toStr(removedMkrs, ", ") + "]...");
       removeCols.sort(Integer::compare);
       for (int i = removeCols.size() - 1; i >= 0; i--) {
         for (int r = 0; r < indepData.size(); r++) {
@@ -2825,6 +2830,9 @@ public class GeneScorePipeline {
                + ArrayUtils.toStr(model.getVarNames(), ",") + ")");
 
     for (String var : scoreNames) {
+      if (removedMkrs.contains(var)) {
+        continue;
+      }
       RegressionResult.Builder rr = RegressionResult.builder();
       rr.setNum(depData.size());
       rr.setnCases(cases);
@@ -3749,7 +3757,6 @@ public class GeneScorePipeline {
     String subdir_2s = "mr/two-sample_" + var;
 
     String mrPrefDirMRStr = getDirPath(study, mf, constr) + subdir_mr + "/" + pheno + "/";
-
     File mrPrefDirMR = new File(mrPrefDirMRStr);
     mrPrefDirMR.mkdirs();
     String mrPrefDirTSStr = getDirPath(study, mf, constr) + subdir_2s + "/" + pheno + "/";
@@ -3770,16 +3777,23 @@ public class GeneScorePipeline {
     PrintWriter markerWriter = Files.getAppropriateWriter(mrPrefDirMRStr + mrrInputFile);
     markerWriter.println(MARKER_RESULT_HEADER);
 
+    Set<String> droppedNoRegress = new HashSet<>();
+    Set<String> droppedNaN = new HashSet<>();
+    Set<String> droppedMAC = new HashSet<>();
+
     int writtenMarkers = 0;
     for (String marker : markersInOrder) {
       if (mf.metaMarkers.containsKey(marker)) { // may have been dropped by meta HitWindows
         RegressionResult rrResult = (univariate ? study.markerRegressions
                                                 : study.multivarRegressions).get(constr, mf)
                                                                             .get(pd, marker);
+
         if (rrResult == null) {
+          droppedNoRegress.add(marker);
           continue;
         }
         if (!study.markerMACPassing.get(constr, mf).get(pd, marker)) {
+          droppedMAC.add(marker);
           // filtered by cmac
           continue;
         }
@@ -3805,6 +3819,8 @@ public class GeneScorePipeline {
           twoSampleOutcome.println(marker + "\t" + metaMarker.alleles.a1 + "\t"
                                    + metaMarker.alleles.a2 + "\t" + FREQ + "\t" + markerBeta + "\t"
                                    + markerSE + "\t" + rrResult.getPval() + "\tOutcome");
+        } else {
+          droppedNaN.add(marker);
         }
       }
     }
@@ -3820,6 +3836,25 @@ public class GeneScorePipeline {
                                   subdir_2s);
       String tsRScript = writeTwoSampleRScript(mrPrefDirTS, pheno);
       mrrScripts.put(twoSKey, tsRScript);
+    }
+
+    if (droppedNaN.size() > 0) {
+      log.reportWarning("Dropped " + droppedNaN.size() + " markers ["
+                        + ArrayUtils.toStr(droppedNaN, ", ")
+                        + "] for NaN regression results (beta/se) when writing MR input files for "
+                        + mrPrefDirMRStr);
+    }
+    if (droppedMAC.size() > 0) {
+      log.reportWarning("Dropped " + droppedMAC.size() + " markers ["
+                        + ArrayUtils.toStr(droppedMAC, ", ")
+                        + "] for not passing MAC filter when writing MR input files for "
+                        + mrPrefDirMRStr);
+    }
+    if (droppedNoRegress.size() > 0) {
+      log.reportWarning("Dropped " + droppedNoRegress.size() + " markers ["
+                        + ArrayUtils.toStr(droppedNoRegress, ", ")
+                        + "] for missing regression results when writing MR input files for "
+                        + mrPrefDirMRStr);
     }
   }
 
