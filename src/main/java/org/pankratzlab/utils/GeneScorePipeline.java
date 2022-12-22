@@ -2682,6 +2682,8 @@ public class GeneScorePipeline {
             if (pass) {
               RegressionResult rrResultPerMkr = actualRegression(dosages, null, pd);
               study.markerRegressions.get(constr, mf).put(pd, marker, rrResultPerMkr);
+            } else {
+              log.report("Marker " + marker + " did not pass CMAC filter for " + pd.phenoName);
             }
           }
 
@@ -2766,7 +2768,8 @@ public class GeneScorePipeline {
     }
     if (removeCols.size() > 0) {
       log.reportWarning("Removing " + removeCols.size() + " low-variance independent variables ["
-                        + ArrayUtils.toStr(removedMkrs, ", ") + "]...");
+                        + ArrayUtils.toStr(removedMkrs, ", ") + "] for multivariate regression for "
+                        + pd.phenoName + " ...");
       removeCols.sort(Integer::compare);
       for (int i = removeCols.size() - 1; i >= 0; i--) {
         for (int r = 0; r < indepData.size(); r++) {
