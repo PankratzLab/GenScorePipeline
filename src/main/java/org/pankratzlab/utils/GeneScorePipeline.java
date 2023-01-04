@@ -328,7 +328,7 @@ public class GeneScorePipeline {
     // constraint -> datafile -> phenofile -> marker
     Table<Constraint, MetaFile, Table<PhenoData, String, RegressionResult>> multivarRegressions = HashBasedTable.create();
     // constraint -> datafile -> phenofile -> marker
-    Table<Constraint, MetaFile, Table<PhenoData, String, Boolean>> markerMACPassing = HashBasedTable.create();
+    Table<Constraint, MetaFile, Table<PhenoData, String, Double>> markerMAC = HashBasedTable.create();
     // constraint -> datafile
     Table<Constraint, MetaFile, double[]> scores = HashBasedTable.create();
     // constraint -> datafile
@@ -349,6 +349,13 @@ public class GeneScorePipeline {
     Table<Constraint, MetaFile, Map<String, Double>> indivMetaScores = HashBasedTable.create();
     // constraint -> id1\tid2 -> mkrRatio, 2 * cnt, cnt2
     Table<Constraint, String, double[]> indivScoreData = HashBasedTable.create();
+
+    public boolean mkrPassesMAC(Constraint constr, MetaFile mf, PhenoData pd, String mkr) {
+      double DOSAGE_THRESHOLD = cmacThresh;
+      double DOSAGE_MAX_THRESHOLD = (pd.indivs.size() * 2) - cmacThresh;
+      double sum = markerMAC.get(constr, mf).get(pd, mkr);
+      return sum > DOSAGE_THRESHOLD && sum < DOSAGE_MAX_THRESHOLD;
+    }
 
     public void dumpStudy() {
       Set<Constraint> allConstraints = new HashSet<>();
@@ -458,6 +465,34 @@ public class GeneScorePipeline {
                                                             + " total IDs were not found for phenotype "
                                                             + e.getElement()));
 
+      }
+
+      for (Constraint constr : allConstraints) {
+        for (MetaFile mf : allMetas) {
+          String path = getDirPath(this, mf, constr) + "MAC.xln";
+          try (PrintWriter writer = Files.getAppropriateWriter(path)) {
+            Table<PhenoData, String, Double> mac = markerMAC.get(constr, mf);
+            List<PhenoData> pdList = new ArrayList<>(mac.rowKeySet());
+            List<String> mkrList = new ArrayList<>(mac.columnKeySet());
+
+            StringJoiner sj = new StringJoiner("\t");
+            sj.add("MarkerName");
+            for (PhenoData pd : pdList) {
+              sj.add(pd.phenoName);
+            }
+            writer.println(sj.toString());
+
+            for (String m : mkrList) {
+              sj = new StringJoiner("\t");
+              sj.add(m);
+              for (PhenoData pd : pdList) {
+                sj.add(Double.toString(mac.get(pd, m)));
+              }
+              writer.println(sj.toString());
+            }
+
+          }
+        }
       }
 
     }
@@ -1303,7 +1338,7 @@ public class GeneScorePipeline {
           study.regressions.put(constr, mf, new HashMap<>());
           study.markerRegressions.put(constr, mf, HashBasedTable.create());
           study.multivarRegressions.put(constr, mf, HashBasedTable.create());
-          study.markerMACPassing.put(constr, mf, HashBasedTable.create());
+          study.markerMAC.put(constr, mf, HashBasedTable.create());
           study.indivMetaScores.put(constr, mf, new HashMap<>());
         }
       }
@@ -2673,13 +2708,9 @@ public class GeneScorePipeline {
               }
             }
 
-            double DOSAGE_THRESHOLD = cmacThresh;
-            double DOSAGE_MAX_THRESHOLD = (pd.indivs.size() * 2) - cmacThresh;
+            study.markerMAC.get(constr, mf).put(pd, marker, sum);
 
-            boolean pass = sum > DOSAGE_THRESHOLD && sum < DOSAGE_MAX_THRESHOLD;
-            study.markerMACPassing.get(constr, mf).put(pd, marker, pass);
-
-            if (pass) {
+            if (study.mkrPassesMAC(constr, mf, pd, marker)) {
               RegressionResult rrResultPerMkr = actualRegression(dosages, null, pd);
               study.markerRegressions.get(constr, mf).put(pd, marker, rrResultPerMkr);
             } else {
@@ -2688,8 +2719,7 @@ public class GeneScorePipeline {
           }
 
           // run regression with all markers from indivAllMarkers
-          Map<String, RegressionResult> rrResultMulti = actualRegressionMultivar(study.markerMACPassing.get(constr,
-                                                                                                            mf),
+          Map<String, RegressionResult> rrResultMulti = actualRegressionMultivar(study, constr, mf,
                                                                                  indivAllMkrs,
                                                                                  mkrNames, null,
                                                                                  pd);
@@ -2701,7 +2731,8 @@ public class GeneScorePipeline {
     }
   }
 
-  private Map<String, RegressionResult> actualRegressionMultivar(Table<PhenoData, String, Boolean> macPass,
+  private Map<String, RegressionResult> actualRegressionMultivar(Study study, Constraint constr,
+                                                                 MetaFile mf,
                                                                  Map<String, double[]> scoreData,
                                                                  List<String> scoreNames,
                                                                  PrintWriter writer, PhenoData pd) {
@@ -2761,7 +2792,7 @@ public class GeneScorePipeline {
     Set<String> removedMkrs = new HashSet<>();
     List<Integer> removeCols = new ArrayList<>();
     for (int i = 0; i < scoreNames.size(); i++) {
-      if (!macPass.get(pd, scoreNames.get(i))) {
+      if (!study.mkrPassesMAC(constr, mf, pd, scoreNames.get(i))) {
         removedMkrs.add(scoreNames.get(i));
         removeCols.add(i);
       }
@@ -3797,7 +3828,8 @@ public class GeneScorePipeline {
           droppedNoRegress.add(marker);
           continue;
         }
-        if (!study.markerMACPassing.get(constr, mf).get(pd, marker)) {
+
+        if (!study.mkrPassesMAC(constr, mf, pd, marker)) {
           droppedMAC.add(marker);
           // filtered by cmac
           continue;
