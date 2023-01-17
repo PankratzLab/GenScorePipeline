@@ -3916,6 +3916,11 @@ public class GeneScorePipeline {
     commands.add("mr_results <-mr(dat)");
     commands.add("write.table(mr_results, \"MR_results.txt\", sep=\"\t\", col.names=T, row.names=F, quote=F)");
     commands.add("mr_report(dat)");
+    commands.add("res_single <- mr_singlesnp(dat, all_method = c(\"mr_weighted_median\", \"mr_egger_regression\", \"mr_ivw\"))");
+    commands.add("mr_forest <- mr_forest_plot(res_single)");
+    commands.add("png('mr_forest_plot.png')");
+    commands.add("mr_forest[[1]]");
+    commands.add("dev.off()");
 
     commands.add("res_single <- mr_singlesnp(dat, all_method = c(\"mr_ivw\", \"mr_egger_regression\", \"mr_weighted_median\"))");
     commands.add("write.table(res_single, \"MRsingleSNP_" + pheno
