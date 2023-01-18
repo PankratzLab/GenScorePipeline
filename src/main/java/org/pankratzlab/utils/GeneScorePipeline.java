@@ -469,7 +469,7 @@ public class GeneScorePipeline {
 
       for (Constraint constr : allConstraints) {
         for (MetaFile mf : allMetas) {
-          String path = getDirPath(this, mf, constr) + "MAC.xln";
+          String path = getDirPath(this, mf, constr) + "EAC.xln";
           try (PrintWriter writer = Files.getAppropriateWriter(path)) {
             Table<PhenoData, String, Double> mac = markerMAC.get(constr, mf);
             List<PhenoData> pdList = new ArrayList<>(mac.rowKeySet());
