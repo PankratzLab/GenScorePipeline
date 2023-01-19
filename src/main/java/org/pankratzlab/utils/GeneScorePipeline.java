@@ -3042,9 +3042,11 @@ public class GeneScorePipeline {
     final double i2;
     final double df;
     final double chi;
+    final double hetP;
 
     public MetaAnalysisResult(double beta, double se, double pval, String direction, int num,
-                              int cases, int controls, double i2, double df, double chi) {
+                              int cases, int controls, double i2, double df, double chi,
+                              double hetP) {
       this.beta = beta;
       this.se = se;
       this.pval = pval;
@@ -3055,6 +3057,7 @@ public class GeneScorePipeline {
       this.i2 = i2;
       this.df = df;
       this.chi = chi;
+      this.hetP = hetP;
     }
 
     @Override
@@ -3063,7 +3066,8 @@ public class GeneScorePipeline {
                                    .add(Double.toString(pval)).add(direction)
                                    .add(Integer.toString(num)).add(Integer.toString(cases))
                                    .add(Integer.toString(controls)).add(Double.toString(i2))
-                                   .add(Double.toString(df)).add(Double.toString(chi)).toString();
+                                   .add(Double.toString(df)).add(Double.toString(hetP))
+                                   .add(Double.toString(chi)).toString();
     }
 
   }
@@ -3110,7 +3114,7 @@ public class GeneScorePipeline {
           PrintWriter writer = Files.getAppropriateWriter(metaDir + "/" + META_DIRECTORY + "/"
                                                           + ma.name + "_" + mf.metaRoot + "_"
                                                           + constr.analysisString + "_InvVar.out");
-          writer.println("SUBTYPE\tVARIATE\tBETA\tSE\tPVAL\tDIRECTION\tNUM\tCASES\tCONTROLS\tHetISq\tHetDF\tHetChiSq");
+          writer.println("SUBTYPE\tVARIATE\tBETA\tSE\tPVAL\tDIRECTION\tNUM\tCASES\tCONTROLS\tHetISq\tHetDF\tHetP\tHetChiSq");
 
           final StringBuilder prsDir = new StringBuilder();
           final List<double[]> prsBS = new ArrayList<>();
@@ -3221,7 +3225,7 @@ public class GeneScorePipeline {
 
           summary.prsResult = new MetaAnalysisResult(data[0], data[1], pval, prsDir.toString(),
                                                      prsCount, prsCase, prsCtrl, Double.NaN,
-                                                     Double.NaN, Double.NaN);
+                                                     Double.NaN, Double.NaN, Double.NaN);
 
           writer.println("PRS\tPRS\t" + summary.prsResult.toString());
 
@@ -3229,9 +3233,10 @@ public class GeneScorePipeline {
             double[] mkrData = org.pankratzlab.utils.gwas.MetaAnalysis.inverseVarianceWeighting(cell.getValue()
                                                                                                     .toArray(new double[0][]),
                                                                                                 log);
+            double hetStat = perMarkerHetStat.get(cell.getKey());
             double mkrPval = computePVal(mkrData[0], mkrData[1],
                                          perMarkerSums.get(cell.getKey())[0]);
-            double chi = ProbDist.ChiDist(perMarkerHetStat.get(cell.getKey()), df);
+            double hetP = ProbDist.ChiDist(perMarkerHetStat.get(cell.getKey()), df);
             MetaAnalysisResult mar = new MetaAnalysisResult(mkrData[0], mkrData[1], mkrPval,
                                                             perMarkerUniDirections.get(cell.getKey())
                                                                                   .toString(),
@@ -3239,7 +3244,7 @@ public class GeneScorePipeline {
                                                             perMarkerSums.get(cell.getKey())[1],
                                                             perMarkerSums.get(cell.getKey())[2],
                                                             perMarkerUniI2.get(cell.getKey()), df,
-                                                            chi);
+                                                            hetStat, hetP);
             summary.perMarkerResultsUni.put(cell.getKey(), mar);
             writer.println(cell.getKey() + "\tUNIVARIATE\t" + mar.toString());
           }
@@ -3247,9 +3252,10 @@ public class GeneScorePipeline {
             double[] mkrData = org.pankratzlab.utils.gwas.MetaAnalysis.inverseVarianceWeighting(cell.getValue()
                                                                                                     .toArray(new double[0][]),
                                                                                                 log);
+            double hetStat = perMarkerMultiHetStat.get(cell.getKey());
             double mkrPval = computePVal(mkrData[0], mkrData[1],
                                          perMarkerMultivarSums.get(cell.getKey())[0]);
-            double chi = ProbDist.ChiDist(perMarkerMultiHetStat.get(cell.getKey()), df);
+            double hetP = ProbDist.ChiDist(perMarkerMultiHetStat.get(cell.getKey()), df);
             MetaAnalysisResult mar = new MetaAnalysisResult(mkrData[0], mkrData[1], mkrPval,
                                                             perMarkerMultiDirections.get(cell.getKey())
                                                                                     .toString(),
@@ -3257,7 +3263,7 @@ public class GeneScorePipeline {
                                                             perMarkerMultivarSums.get(cell.getKey())[1],
                                                             perMarkerMultivarSums.get(cell.getKey())[2],
                                                             perMarkerMultiI2.get(cell.getKey()), df,
-                                                            chi);
+                                                            hetStat, hetP);
             summary.perMarkerResultsMulti.put(cell.getKey(), mar);
             writer.println(cell.getKey() + "\tMULTIVARIATE\t" + mar.toString());
           }
