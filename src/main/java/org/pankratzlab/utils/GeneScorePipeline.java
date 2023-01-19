@@ -3039,9 +3039,12 @@ public class GeneScorePipeline {
     final int num;
     final int cases;
     final int controls;
+    final double i2;
+    final double df;
+    final double chi;
 
     public MetaAnalysisResult(double beta, double se, double pval, String direction, int num,
-                              int cases, int controls) {
+                              int cases, int controls, double i2, double df, double chi) {
       this.beta = beta;
       this.se = se;
       this.pval = pval;
@@ -3049,14 +3052,18 @@ public class GeneScorePipeline {
       this.num = num;
       this.cases = cases;
       this.controls = controls;
+      this.i2 = i2;
+      this.df = df;
+      this.chi = chi;
     }
 
     @Override
     public String toString() {
-      return new StringBuilder().append(beta).append("\t").append(se).append("\t").append(pval)
-                                .append("\t").append(direction).append("\t").append(num)
-                                .append("\t").append(cases).append("\t").append(controls)
-                                .toString();
+      return new StringJoiner("\t").add(Double.toString(beta)).add(Double.toString(se))
+                                   .add(Double.toString(pval)).add(direction)
+                                   .add(Integer.toString(num)).add(Integer.toString(cases))
+                                   .add(Integer.toString(controls)).add(Double.toString(i2))
+                                   .add(Double.toString(df)).add(Double.toString(chi)).toString();
     }
 
   }
@@ -3103,7 +3110,7 @@ public class GeneScorePipeline {
           PrintWriter writer = Files.getAppropriateWriter(metaDir + "/" + META_DIRECTORY + "/"
                                                           + ma.name + "_" + mf.metaRoot + "_"
                                                           + constr.analysisString + "_InvVar.out");
-          writer.println("SUBTYPE\tVARIATE\tBETA\tSE\tPVAL\tDIRECTION\tNUM\tCASES\tCONTROLS");
+          writer.println("SUBTYPE\tVARIATE\tBETA\tSE\tPVAL\tDIRECTION\tNUM\tCASES\tCONTROLS\tHetISq\tHetDF\tHetChiSq");
 
           final StringBuilder prsDir = new StringBuilder();
           final List<double[]> prsBS = new ArrayList<>();
@@ -3194,8 +3201,27 @@ public class GeneScorePipeline {
                                                                                            log);
           double pval = computePVal(data[0], data[1], prsCount);
 
+          int df = ma.entries.size() - 1;
+          Map<String, Double> perMarkerUniI2 = new HashMap<>();
+          Map<String, Double> perMarkerMultiI2 = new HashMap<>();
+          Map<String, Double> perMarkerHetStat = new HashMap<>();
+          Map<String, Double> perMarkerMultiHetStat = new HashMap<>();
+          perMarkerBS.entrySet().stream().forEach(betaSEs -> {
+            String marker = betaSEs.getKey();
+            double[] hetStati2 = computeHetStat(df, betaSEs.getValue());
+            perMarkerHetStat.put(marker, hetStati2[0]);
+            perMarkerUniI2.put(marker, hetStati2[1]);
+          });
+          perMarkerMultivarBS.entrySet().stream().forEach(betaSEs -> {
+            String marker = betaSEs.getKey();
+            double[] hetStati2 = computeHetStat(df, betaSEs.getValue());
+            perMarkerMultiHetStat.put(marker, hetStati2[0]);
+            perMarkerMultiI2.put(marker, hetStati2[1]);
+          });
+
           summary.prsResult = new MetaAnalysisResult(data[0], data[1], pval, prsDir.toString(),
-                                                     prsCount, prsCase, prsCtrl);
+                                                     prsCount, prsCase, prsCtrl, Double.NaN,
+                                                     Double.NaN, Double.NaN);
 
           writer.println("PRS\tPRS\t" + summary.prsResult.toString());
 
@@ -3205,12 +3231,15 @@ public class GeneScorePipeline {
                                                                                                 log);
             double mkrPval = computePVal(mkrData[0], mkrData[1],
                                          perMarkerSums.get(cell.getKey())[0]);
+            double chi = ProbDist.ChiDist(perMarkerHetStat.get(cell.getKey()), df);
             MetaAnalysisResult mar = new MetaAnalysisResult(mkrData[0], mkrData[1], mkrPval,
                                                             perMarkerUniDirections.get(cell.getKey())
                                                                                   .toString(),
                                                             perMarkerSums.get(cell.getKey())[0],
                                                             perMarkerSums.get(cell.getKey())[1],
-                                                            perMarkerSums.get(cell.getKey())[2]);
+                                                            perMarkerSums.get(cell.getKey())[2],
+                                                            perMarkerUniI2.get(cell.getKey()), df,
+                                                            chi);
             summary.perMarkerResultsUni.put(cell.getKey(), mar);
             writer.println(cell.getKey() + "\tUNIVARIATE\t" + mar.toString());
           }
@@ -3220,12 +3249,15 @@ public class GeneScorePipeline {
                                                                                                 log);
             double mkrPval = computePVal(mkrData[0], mkrData[1],
                                          perMarkerMultivarSums.get(cell.getKey())[0]);
+            double chi = ProbDist.ChiDist(perMarkerMultiHetStat.get(cell.getKey()), df);
             MetaAnalysisResult mar = new MetaAnalysisResult(mkrData[0], mkrData[1], mkrPval,
                                                             perMarkerMultiDirections.get(cell.getKey())
                                                                                     .toString(),
                                                             perMarkerMultivarSums.get(cell.getKey())[0],
                                                             perMarkerMultivarSums.get(cell.getKey())[1],
-                                                            perMarkerMultivarSums.get(cell.getKey())[2]);
+                                                            perMarkerMultivarSums.get(cell.getKey())[2],
+                                                            perMarkerMultiI2.get(cell.getKey()), df,
+                                                            chi);
             summary.perMarkerResultsMulti.put(cell.getKey(), mar);
             writer.println(cell.getKey() + "\tMULTIVARIATE\t" + mar.toString());
           }
@@ -3236,6 +3268,30 @@ public class GeneScorePipeline {
         }
       }
     }
+  }
+
+  private double[] computeHetStat(int df, List<double[]> betaSes) {
+    double[] z = new double[betaSes.size()];
+    double[] w = new double[betaSes.size()];
+    double stat = 0;
+    double weight = 0;
+
+    for (int i = 0; i < betaSes.size(); i++) {
+      z[i] = betaSes.get(i)[0];
+      w[i] = 1d / (betaSes.get(i)[1] * betaSes.get(i)[1]);
+      stat += (w[i] * z[i]);
+      weight += w[i];
+    }
+
+    double e = stat / weight;
+
+    double hetStat = 0;
+    for (int i = 0; i < z.length; i++) {
+      hetStat += (z[i] - e) * (z[i] - e) * w[i];
+    }
+
+    double i2 = (hetStat - df + 1) / (hetStat * 100d);
+    return new double[] {hetStat, i2};
   }
 
   private double computePVal(double beta, double se, double n) {
