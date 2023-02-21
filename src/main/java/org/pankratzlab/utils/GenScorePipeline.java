@@ -95,7 +95,7 @@ import com.googlecode.charts4j.collect.Lists;
 import htsjdk.samtools.liftover.LiftOver;
 import htsjdk.samtools.util.Interval;
 
-public class GeneScorePipeline {
+public class GenScorePipeline {
 
   private static final String FILE_EXT_OUT = ".out";
   private static final String FILE_PREFIX_HITS = "/hits_";
@@ -1310,7 +1310,7 @@ public class GeneScorePipeline {
     }
   }
 
-  public GeneScorePipeline(String workDir, float[] indexThresholds, int[] windowMins,
+  public GenScorePipeline(String workDir, float[] indexThresholds, int[] windowMins,
                            float[] windowExtThresholds, double missThresh, int cmacThresh,
                            boolean runMetaHW, String rLibsDir, boolean plotOddsRatio,
                            GenomeBuild build, boolean overwrite, Logger log) {
@@ -3556,7 +3556,7 @@ public class GeneScorePipeline {
 
       try {
         FileParserFactory.setup(dir + "/" + resFile, cols.toArray(FileColumn[]::new)).build()
-                         .parseToFile(GeneScorePipeline.this.metaDir + "mr_results.xln", "\t",
+                         .parseToFile(GenScorePipeline.this.metaDir + "mr_results.xln", "\t",
                                       header.getAndSet(false), append.getAndSet(true));
       } catch (IOException e1) {
         throw new RuntimeException(e1);
@@ -4333,7 +4333,7 @@ public class GeneScorePipeline {
       System.err.println("Error - argument 'workDir' must be a valid directory");
       System.exit(1);
     }
-    GeneScorePipeline gsp = new GeneScorePipeline(workDir, iT, mZ, wT, mT, cmac, runMetaHW,
+    GenScorePipeline gsp = new GenScorePipeline(workDir, iT, mZ, wT, mT, cmac, runMetaHW,
                                                   rLibsDir, plotOddsRatio, build, overwrite, log);
     gsp.runPipeline();
   }
