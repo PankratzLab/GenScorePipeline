@@ -2,12 +2,45 @@
 
 Note: run `org.genvisis.cnv.gwas.utils.GeneScorePipeline -h` to see what is required to run the pipeline.
 
-## Prior to Analysis
 
-Create these files:
+## Prior to analysis
 
+1. Create files:
+    - Genetic dataset
+    - data.txt file that points to genetic dataset (tab-delimited file – D <tab> label <tab> location of data/map files <tab> extension of data files <tab> extension of map files <tab> full path to IDs file [any file; the first two columns are read as IDs])
 
-## Results
+    - Effect files saved as .meta files 
+      - Meta files must contain ‘MarkerName’, ‘Effect’, ‘Freq’, ‘Pvalue’, ‘Chr’ and ‘Position’ (MarkerName should be reflective of name in the genetic dataset) (column names are not fixed - see appendix for notes on usable column names).
+      - If ‘Chr’ and ‘Position’ are not present, there is a pre-process step available to look those up using DBSnp databases. To get chr and position for a list of rsID: http://genreport.umn.edu/#topOfPage
+      - If looking at a single SNP the effect (beta value) should be 1.
+
+    - .pheno files 
+      - First 3 columns should be ‘fid’, ‘iid’, and ‘case_control’ 
+      - Then add columns for any covariates (e.g., age, sex, etc.)
+
+2. Create a location directory for GSP (e.g., GSP)
+    - Inside directory:
+      - Make a Data directory inside the GSP directory
+        - Place .pheno files and a data.txt file here
+      - Place .meta files inside the GSP location directory
+
+  
+## Run GenScorePipeline 
+  
+Run GSP from the directory above the GSP directory.
+- To run interactively: 
+  module load R/3.5.0
+  jcp org.genvisis.cnv.gwas.utils.GeneScorePipeline workDir=/ rLibsDir=/
+
+- To submit as job (.qsub) saved above GSP directory:
+  echo "start GSP at: " `date`
+  cd DIRECTORYNAME
+  module load R/3.5.0
+  java -Djava.awt.headless=true -Xmx16G -jar plab-internal.jar org.genvisis.cnv.gwas.utils.GeneScorePipeline workDir=./GSP rLibsDir=<DIRECT PATH TO  PERSONAL R LIBRARY>
+  echo "end GSP at: " `date`
+
+  
+## Review your results
 
 | Result Column | Explanation |
 | ------------- | ------------- |
@@ -33,3 +66,16 @@ Create these files:
 | #indexVariantsInDataset | Number we have in our dataset |
 | B-F-SCORE | How much is captured if T < U : missingness; ideal =1 |
 | INVCHI-SCORE | How much is captured if T < U : missingness; ideal =1 |
+                                              
+                                              
+## Appendix 1: Column Names
+	
+Column names can be any from a list of allowed aliases, e.g., ‘SNP’ instead of ‘MarkerName’.
+Column aliases are defined in the Genvisis source code in the org.pankratzlab.common.Aliases class, using:
+  MARKER_NAMES
+  CHRS
+  POSITIONS
+  EFFECTS
+  ALLELE_FREQS
+  PVALUES
+  STD_ERRS
