@@ -11,32 +11,31 @@ Note: run `org.genvisis.cnv.gwas.utils.GeneScorePipeline -h` to see what is requ
 
     - Effect files saved as .meta files 
       - Meta files must contain ‘MarkerName’, ‘Effect’, ‘Freq’, ‘Pvalue’, ‘Chr’ and ‘Position’ (MarkerName should be reflective of name in the genetic dataset) (column names are not fixed - see appendix for notes on usable column names).
-      - If ‘Chr’ and ‘Position’ are not present, there is a pre-process step available to look those up using DBSnp databases. To get chr and position for a list of rsID: http://genreport.umn.edu/#topOfPage
-      - If looking at a single SNP the effect (beta value) should be 1.
+      - If ‘Chr’ and ‘Position’ are not present, there is a pre-process step available to look those up using DBSnp databases. To obtain chr and position for a list of rsIDs go to http://genreport.umn.edu/#topOfPage
+      - For a single SNP the effect (beta value) should be 1.
 
     - .pheno files 
-      - First 3 columns should be ‘fid’, ‘iid’, and ‘case_control’ 
+      - The first 3 columns should be ‘fid’, ‘iid’, and ‘case_control’ 
       - Then add columns for any covariates (e.g., age, sex, etc.)
 
 2. Create a location directory for GSP (e.g., GSP)
-    - Inside directory:
-      - Make a Data directory inside the GSP directory
-        - Place .pheno files and a data.txt file here
-      - Place .meta files inside the GSP location directory
+    - Make a Data directory inside the GSP directory
+      - Place .pheno files and a data.txt file here
+    - Place .meta files inside the GSP location directory
 
   
 ## Run GenScorePipeline 
   
 Run GSP from the directory above the GSP directory.
-- To run interactively: 
-  module load R/3.5.0
+- To run interactively: <br> 
+  module load R/3.5.0 <br>
   jcp org.genvisis.cnv.gwas.utils.GeneScorePipeline workDir=/ rLibsDir=/
 
-- To submit as job (.qsub) saved above GSP directory:
-  echo "start GSP at: " `date`
-  cd DIRECTORYNAME
-  module load R/3.5.0
-  java -Djava.awt.headless=true -Xmx16G -jar plab-internal.jar org.genvisis.cnv.gwas.utils.GeneScorePipeline workDir=./GSP rLibsDir=<DIRECT PATH TO  PERSONAL R LIBRARY>
+- To submit as job (.qsub) saved above GSP directory: <br>
+  echo "start GSP at: " `date` <br>
+  cd DIRECTORYNAME <br>
+  module load R/3.5.0 <br>
+  java -Djava.awt.headless=true -Xmx16G -jar plab-internal.jar org.genvisis.cnv.gwas.utils.GeneScorePipeline workDir=./GSP rLibsDir=<DIRECT PATH TO  PERSONAL R LIBRARY> <br>
   echo "end GSP at: " `date`
 
   
