@@ -32,6 +32,7 @@ import org.apache.commons.math3.stat.inference.TTest;
 import org.apache.commons.math3.stat.inference.WilcoxonSignedRankTest;
 import org.pankratzlab.common.Aliases;
 import org.pankratzlab.common.ArrayUtils;
+import org.pankratzlab.common.CLI;
 import org.pankratzlab.common.CmdLine;
 import org.pankratzlab.common.Command;
 import org.pankratzlab.common.Files;
@@ -90,7 +91,6 @@ import com.google.common.collect.Sets;
 import com.google.common.collect.Streams;
 import com.google.common.collect.Table;
 import com.google.common.primitives.Doubles;
-import com.googlecode.charts4j.collect.Lists;
 
 import htsjdk.samtools.liftover.LiftOver;
 import htsjdk.samtools.util.Interval;
@@ -99,13 +99,6 @@ public class GenScorePipeline {
 
   private static final String FILE_EXT_OUT = ".out";
   private static final String FILE_PREFIX_HITS = "/hits_";
-  private static final String ARG_WORKING_DIR = "workDir=";
-  private static final String ARG_INDEX_THRESH = "indexThresh=";
-  private static final String ARG_WINDOW_SIZE = "minWinSize=";
-  private static final String ARG_WINDOW_EXT = "winThresh=";
-  private static final String ARG_MISS_THRESH = "missThresh=";
-  private static final String ARG_R_LIBS_DIR = "rLibsDir=";
-  private static final String FLAG_PLOT_ODDS_RATIO = "-plotOddsRatio";
 
   private static float DEFAULT_INDEX_THRESHOLD = (float) 0.00000005;
   private static int DEFAULT_WINDOW_MIN_SIZE_PER_SIDE = 500000;// 500kb each side is technically a
@@ -1311,9 +1304,9 @@ public class GenScorePipeline {
   }
 
   public GenScorePipeline(String workDir, float[] indexThresholds, int[] windowMins,
-                           float[] windowExtThresholds, double missThresh, int cmacThresh,
-                           boolean runMetaHW, String rLibsDir, boolean plotOddsRatio,
-                           GenomeBuild build, boolean overwrite, Logger log) {
+                          float[] windowExtThresholds, double missThresh, int cmacThresh,
+                          boolean runMetaHW, String rLibsDir, boolean plotOddsRatio,
+                          GenomeBuild build, boolean overwrite, Logger log) {
     this.log = log;
     this.overwrite = overwrite;
     this.build = build;
@@ -3550,9 +3543,9 @@ public class GenScorePipeline {
       FileColumn<String> nCol3 = new FixedValueColumn("#indexVariantsInMeta", indexVarMeta);
       FileColumn<String> nCol4 = new FixedValueColumn("#indexVariantsInDataset", indexVarData);
 
-      List<FileColumn<?>> cols = Lists.of(studyCol, fileCol, phenoCol, constrCol, subtypeCol,
-                                          variateCol, methodCol, betaCol, seCol, pCol, nCol, nCol2,
-                                          nCol3, nCol4);
+      List<FileColumn<?>> cols = List.of(studyCol, fileCol, phenoCol, constrCol, subtypeCol,
+                                         variateCol, methodCol, betaCol, seCol, pCol, nCol, nCol2,
+                                         nCol3, nCol4);
 
       try {
         FileParserFactory.setup(dir + "/" + resFile, cols.toArray(FileColumn[]::new)).build()
@@ -4081,6 +4074,11 @@ public class GenScorePipeline {
   public static final String COMMAND_GENESCORE = "geneScore";
 
   public static void fromParameters(String filename, Logger log) {
+    String ARG_WORKING_DIR = "workDir=";
+    String ARG_INDEX_THRESH = "indexThresh=";
+    String ARG_WINDOW_SIZE = "minWinSize=";
+    String ARG_WINDOW_EXT = "winThresh=";
+
     String dir = ext.verifyDirFormat(new File(ext.parseDirectoryOfFile(filename)).getAbsolutePath());
     List<String> params;
     params = Files.parseControlFile(filename, COMMAND_GENESCORE,
@@ -4155,7 +4153,65 @@ public class GenScorePipeline {
     return (new File(file)).getAbsolutePath();
   }
 
+  public static class PreprocessGSP {
+    public static void main(String[] args) {
+
+      String[] processList = null;
+      boolean process = false;
+      POPULATION pop = POPULATION.ALL;
+      GenomeBuild build = GenomeBuild.HG19;
+      GenomeBuild toBuild = GenomeBuild.HG19;
+      String logFile = null;
+
+      boolean fail = false;
+
+      for (String arg : args) {
+        if (arg.equals("-h") || arg.equals("-help") || arg.equals("/h") || arg.equals("/help")) {
+          System.err.println("Invalid options");
+          System.exit(1);
+        } else if (arg.startsWith("process=")) {
+          processList = arg.split("=")[1].split(",");
+          process = true;
+        } else if (arg.startsWith("pop=")) {
+          pop = POPULATION.valueOf(arg.split("=")[1]);
+        } else if (arg.startsWith("build=")) {
+          build = GenomeBuild.valueOf(arg.split("=")[1].toUpperCase());
+        } else if (arg.startsWith("liftBuild=")) {
+          toBuild = GenomeBuild.valueOf(arg.split("=")[1].toUpperCase());
+        } else if (arg.startsWith("log=")) {
+          logFile = arg.split("=")[1];
+        } else if (arg.equals("-overwrite")) {} else {
+          fail = true;
+          System.err.println("Error - invalid argument: " + arg);
+        }
+      }
+      if (fail || args.length == 0) {
+        System.err.println("Invalid options");
+        System.exit(1);
+      }
+
+      Logger log = new Logger(logFile, true);
+
+      if (process) {
+        preprocessDataFiles(processList, pop, build, toBuild, log);
+        return;
+      }
+    }
+  }
+
   public static void main(String[] args) {
+    final String ARG_WORKING_DIR = "workDir";
+    final String ARG_INDEX_THRESH = "indexThresh";
+    final String ARG_WINDOW_SIZE = "minWinSize";
+    final String ARG_WINDOW_EXT = "winThresh";
+    final String ARG_MISS_THRESH = "missThresh";
+    final String ARG_R_LIBS_DIR = "rLibsDir";
+    final String ARG_CMAC_THRESHOLD = "cmac";
+    final String ARG_RUN_META_HW = "runMetaHW";
+    final String ARG_GENOME_BUILD = "build";
+    final String ARG_LOG_LOCATION = "log";
+    final String FLAG_PLOT_ODDS_RATIO = "plotOddsRatio";
+    final String FLAG_OVERWRITE = "overwrite";
 
     String workDir = null;
     String logFile = "GeneScorePipeline.log";
@@ -4165,176 +4221,153 @@ public class GenScorePipeline {
     float[] wT = new float[] {DEFAULT_WINDOW_EXTENSION_THRESHOLD};
     double mT = DEFAULT_MIN_MISS_THRESH;
     int cmac = 5;
-
-    String[] processList = null;
-    boolean process = false;
     boolean runMetaHW = true;
-    POPULATION pop = POPULATION.ALL;
+
     GenomeBuild build = GenomeBuild.HG19;
-    GenomeBuild toBuild = GenomeBuild.HG19;
     String rLibsDir = null;
     boolean plotOddsRatio = false;
     boolean overwrite = false;
 
-    String usage = "\n"
-                   + "GeneScorePipeline is a convention-driven submodule.  It relies on a standard folder structure and file naming scheme:\n"
-                   + "\tThe directory and file structure must conform to the following:\n"
-                   + "\t\t>Root Directory ['workDir' argument]\n" + "\t\t\t>SNP Effect files:\n"
-                   + "\t\t\t\t-Effect files must end with '.meta'.\n"
-                   + "\t\t\t\t-Effect files may be hand-constructed, or may be generated with the 'preprocess' command from a .xln file\n"
-                   + "\t\t\t\t-Effect files contain, at minimum, SNP, Freq, P-value, and Beta/Effect, and, if created with the preprocessor, will include any additional information present in the .xln file\n"
-                   + "\t\t\t\t-HitWindows analysis will be run on SNP Effect files, with results being used in regression analysis; the\n"
-                   + "\t\t\t\t\tadditional arguments to GeneScorePipeline affect only the HitWindows processing.\n"
-                   + "\t\t\t>Covariate files:\n"
-                   + "\t\t\t\t-Covariate files must end with '.covar'.\n"
-                   + "\t\t\t\t-Covariate data will be added to ALL analyses.\n"
-                   + "\t\t\t\t-Covariate files contain, at minimum, two ID columns (FID and IID), and any number of data columns.\n"
-                   + "\t\t\t>Data Source Directory 1\n"
-                   + "\t\t\t\t>data.txt file [defines location of data, which may be in an arbitrary location in the filesystem]\n"
-                   + "\t\t\t\t\tExample:\n"
-                   + "\t\t\t\t\tdataLabel1\tfullPathDataFile1\tFullPathMapFile1\tFullPathIdFile1\n"
-                   + "\t\t\t\t\tdataLabel2\tfullPathDataFile2\tFullPathMapFile2\tFullPathIdFile2\n"
-                   + "\t\t\t\t\tdataLabel3\tdir1\tdataFileExt1\tmapFileExt1\tidFile3\n"
-                   + "\t\t\t\t\tdataLabel4\tdir2\tdataFileExt2\tmapFileExt2\tidFile4\n"
-                   + "\t\t\t\t\t>For data files that contain map or ID info, 'FullPathMapFile' / 'FullPathIdFile' / 'mapFileExt1' / 'idFile' can be replaced with a period ('.').\n"
-                   + "\t\t\t\t>Phenotype files\n"
-                   + "\t\t\t\t\t-Phenotype files must end with '.pheno'.\n"
-                   + "\t\t\t\t\t-All '.pheno' files will be included as a separate regression analysis\n"
-                   + "\t\t\t\t\t-Phenotype files contain, at minimum, two ID columns (FID and IID), a dependent variable column, and any number of covariate columns.\n"
-                   + "\t\t\t\t\t\t[Note: if data is in PLINK format and contains valid phenotype status information, an AFFECTED.PHENO file will be created]\n"
-                   + "\t\t\t>Data Source Directory 2\n" + "\t\t\t\t>data.txt file\n"
-                   + "\t\t\t\t>Pheno3.pheno file\n" + "\t\t\t>...\n" + "\n" + "\n"
-                   + "gwas.GeneScorePipeline requires 1+ arguments\n"
-                   + "   (1) Pre-process data files (i.e. process=path/to/file1.xln,path/to/file2.xln (not the default)) \n"
-                   + "  OR\n"
-                   + "   (1) Metastudy directory root, containing subdirectories for each study (i.e. workDir=C:/ (not the default))\n"
-                   + "       OPTIONAL:\n"
-                   + "   (2) p-value threshold (or comma-delimited list) for index SNPs (i.e. "
-                   + ARG_INDEX_THRESH + DEFAULT_INDEX_THRESHOLD + " (default))\n"
-                   + "   (3) minimum num bp per side of window (or comma delimited list) (i.e. "
-                   + ARG_WINDOW_SIZE + DEFAULT_WINDOW_MIN_SIZE_PER_SIDE + " (default))\n"
-                   + "   (4) p-value threshold to extend the window (or comma delimited list) (i.e. "
-                   + ARG_WINDOW_EXT + DEFAULT_WINDOW_EXTENSION_THRESHOLD + " (default))\n"
-                   + "   (5) minimum ratio of missing data for an individual's gene loading score to be included in the final analysis (i.e. "
-                   + ARG_MISS_THRESH + DEFAULT_MIN_MISS_THRESH + " (default))\n"
-                   + "   (6) Enable/Disable HitWindows on input '.meta' files (only applicable if #snps > 1000) (i.e. runMetaHW="
-                   + runMetaHW + " (default))\n"
+    String header = "\nGeneScorePipeline is a convention-driven submodule.  It relies on a standard folder structure and file naming scheme:\n"
+                    + "The directory and file structure must conform to the following:\n"
+                    + "- >Root Directory ['workDir' argument]\n"
+                    + "-  >SNP Effect files:\n"
+                    + "-    -Effect files must end with '.meta'.\n"
+                    + "-    -Effect files may be hand-constructed, or may be generated with the 'preprocess' command from a .xln file\n"
+                    + "-    -Effect files contain, at minimum, SNP, Freq, P-value, and Beta/Effect, and, if created with the preprocessor, will include any additional information present in the .xln file\n"
+                    + "-    -HitWindows analysis will be run on SNP Effect files, with results being used in regression analysis; the additional arguments to GeneScorePipeline affect only the HitWindows processing.\n"
+                    + "-  >Covariate files:\n"
+                    + "-    -Covariate files must end with '.covar'.\n"
+                    + "-    -Covariate data will be added to ALL analyses.\n"
+                    + "-    -Covariate files contain, at minimum, two ID columns (FID and IID), and any number of data columns.\n"
+                    + "-  >Data Source Directory 1\n"
+                    + "-    >data.txt file [defines location of data, which may be in an arbitrary location in the filesystem]\n"
+                    + "-  Example:\n"
+                    + "-    dataLabel1    fullPathDataFile1    FullPathMapFile1    FullPathIdFile1\n"
+                    + "-    dataLabel2    fullPathDataFile2    FullPathMapFile2    FullPathIdFile2\n"
+                    + "-    dataLabel3    dir1    dataFileExt1    mapFileExt1    idFile3\n"
+                    + "-    dataLabel4    dir2    dataFileExt2    mapFileExt2    idFile4\n"
+                    + "-  >For data files that contain map or ID info, 'FullPathMapFile' / 'FullPathIdFile' / 'mapFileExt1' / 'idFile' can be replaced with a period ('.').\n"
+                    + "-    >Phenotype files\n"
+                    + "-    -Phenotype files must end with '.pheno'.\n"
+                    + "-    -All '.pheno' files will be included as a separate regression analysis\n"
+                    + "-    -Phenotype files contain, at minimum, two ID columns (FID and IID), a dependent variable column, and any number of covariate columns.\n"
+                    + "-    [Note: if data is in PLINK format and contains valid phenotype status information, an AFFECTED.PHENO file will be created]\n"
+                    + "-  >Data Source Directory 2\n" + ">data.txt file\n" + ">Pheno3.pheno file\n"
+                    + "-    >..."
+                    + "\n";
 
-                   + "   (7) Directory of R libraries to generate Mendelian Randomization script from .meta SNPs (i.e. "
-                   + ARG_R_LIBS_DIR + "/panfs/roc/msisoft/R/3.3.3/ (not activated by default))\n"
+    CLI cli = new CLI(GenScorePipeline.class);
+    cli.addHeader(header);
 
-                   + "   (8) Flag to plot Odds Ratios isntead of Beta in Forest Plots (i.e. "
-                   + FLAG_PLOT_ODDS_RATIO + " (not activated by default))\n"
-                   + "   (9) Genome Build (i.e. build=" + build.name() + " (default))\n"
-                   + "  (10) If pre-processing (with process= argument), request a LiftOver to a different genome build (liftBuild="
-                   + toBuild.name() + " (default))\n" +
+    cli.addArg(ARG_WORKING_DIR,
+               "Meta-study directory root, containing subdirectories for each study", true);
+    cli.addArgWithDefault(ARG_INDEX_THRESH,
+                          "P-value threshold (or comma-delimited list) for index SNPs",
+                          "" + DEFAULT_INDEX_THRESHOLD);
+    cli.addArgWithDefault(ARG_WINDOW_EXT,
+                          "P-value threshold to extend the window (or comma delimited list)",
+                          "" + DEFAULT_WINDOW_EXTENSION_THRESHOLD);
+    cli.addArgWithDefault(ARG_WINDOW_SIZE,
+                          "Minimum num bp per side of window (or comma delimited list)",
+                          "" + DEFAULT_WINDOW_MIN_SIZE_PER_SIDE);
+    cli.addArgWithDefault(ARG_MISS_THRESH,
+                          "Minimum ratio of missing data for an individual's gene loading score to be included in the final analysis",
+                          DEFAULT_MIN_MISS_THRESH);
+    cli.addArgWithDefault(ARG_CMAC_THRESHOLD,
+                          "Minor allele count threshold for removing SNPs from regression analysis",
+                          cmac);
+    cli.addFlag(FLAG_OVERWRITE,
+                "Overwrite any existing files (if not specified, "
+                                + GenScorePipeline.class.getName()
+                                + " will use existing files rather than recreate them.");
+    cli.addFlag(FLAG_PLOT_ODDS_RATIO, "Flag to plot Odds Ratios isntead of Beta in Forest Plots");
+    cli.addArg(ARG_R_LIBS_DIR,
+               "Directory of R libraries to generate Mendelian Randomization script from .meta SNPs",
+               false);
+    cli.addArgWithDefault(ARG_RUN_META_HW,
+                          "Enable/Disable HitWindows on input '.meta' files (only applicable if #snps > 1000)",
+                          "true");
+    cli.addArg(ARG_GENOME_BUILD,
+               "Genome Build (one of " + ArrayUtils.toStr(GenomeBuild.values(), ", ") + ")");
+    cli.addArg(ARG_LOG_LOCATION, "Location of log file to append to", false);
 
-                   // " (8) Number of threads to use for computation (i.e. threads=" + threads + "
-                   // (default))\n" +
-                   "";
+    cli.parseWithExit(args);
 
-    boolean fail = false;
-    for (String arg : args) {
-      if (arg.equals("-h") || arg.equals("-help") || arg.equals("/h") || arg.equals("/help")) {
-        System.err.println(usage);
-        System.exit(1);
-      } else if (arg.startsWith(ARG_WORKING_DIR)) {
-        workDir = arg.split("=")[1];
-      } else if (arg.startsWith("process=")) {
-        processList = arg.split("=")[1].split(",");
-        process = true;
-      } else if (arg.startsWith("pop=")) {
-        pop = POPULATION.valueOf(arg.split("=")[1]);
-      } else if (arg.startsWith("build=")) {
-        build = GenomeBuild.valueOf(arg.split("=")[1].toUpperCase());
-      } else if (arg.startsWith("liftBuild=")) {
-        toBuild = GenomeBuild.valueOf(arg.split("=")[1].toUpperCase());
-      } else if (arg.startsWith(ARG_INDEX_THRESH)) {
-        String[] lst = arg.split("=")[1].split(",");
-        int cntValid = 0;
-        for (String poss : lst) {
-          if (ext.isValidDouble(poss)) {
-            cntValid++;
-          }
+    workDir = cli.get(ARG_WORKING_DIR);
+    build = GenomeBuild.valueOf(cli.get(ARG_GENOME_BUILD));
+
+    if (cli.has(ARG_INDEX_THRESH)) {
+      String[] lst = cli.get(ARG_INDEX_THRESH).split(",");
+      int cntValid = 0;
+      for (String poss : lst) {
+        if (ext.isValidDouble(poss)) {
+          cntValid++;
         }
-        iT = new float[cntValid];
-        int ind = 0;
-        for (String poss : lst) {
-          if (ext.isValidDouble(poss)) {
-            iT[ind] = Float.parseFloat(poss);
-            ind++;
-          }
+      }
+      iT = new float[cntValid];
+      int ind = 0;
+      for (String poss : lst) {
+        if (ext.isValidDouble(poss)) {
+          iT[ind] = Float.parseFloat(poss);
+          ind++;
         }
-      } else if (arg.startsWith(ARG_WINDOW_SIZE)) {
-        String[] lst = arg.split("=")[1].split(",");
-        int cntValid = 0;
-        for (String poss : lst) {
-          if (ext.isValidDouble(poss)) {
-            cntValid++;
-          }
-        }
-        mZ = new int[cntValid];
-        int ind = 0;
-        for (String poss : lst) {
-          if (ext.isValidInteger(poss)) {
-            mZ[ind] = Integer.parseInt(poss);
-            ind++;
-          }
-        }
-      } else if (arg.startsWith(ARG_WINDOW_EXT)) {
-        String[] lst = arg.split("=")[1].split(",");
-        int cntValid = 0;
-        for (String poss : lst) {
-          if (ext.isValidDouble(poss)) {
-            cntValid++;
-          }
-        }
-        wT = new float[cntValid];
-        int ind = 0;
-        for (String poss : lst) {
-          if (ext.isValidDouble(poss)) {
-            wT[ind] = Float.parseFloat(poss);
-            ind++;
-          }
-        }
-      } else if (arg.startsWith(ARG_MISS_THRESH)) {
-        mT = ext.parseDoubleArg(arg);
-      } else if (arg.startsWith("runMetaHW=")) {
-        runMetaHW = ext.parseBooleanArg(arg);
-      } else if (arg.startsWith(ARG_R_LIBS_DIR)) {
-        rLibsDir = ext.parseStringArg(arg);
-      } else if (arg.equals(FLAG_PLOT_ODDS_RATIO)) {
-        plotOddsRatio = true;
-      } else if (arg.startsWith("log=")) {
-        logFile = arg.split("=")[1];
-      } else if (arg.equals("-overwrite")) {
-        overwrite = true;
-      } else if (arg.startsWith("cmac=")) {
-        cmac = ext.parseIntArg(arg);
-      } else {
-        fail = true;
-        System.err.println("Error - invalid argument: " + arg);
       }
     }
-    if (fail || args.length == 0) {
-      System.err.println(usage);
-      System.exit(1);
+
+    if (cli.has(ARG_WINDOW_SIZE)) {
+      String[] lst = cli.get(ARG_WINDOW_SIZE).split(",");
+      int cntValid = 0;
+      for (String poss : lst) {
+        if (ext.isValidDouble(poss)) {
+          cntValid++;
+        }
+      }
+      mZ = new int[cntValid];
+      int ind = 0;
+      for (String poss : lst) {
+        if (ext.isValidInteger(poss)) {
+          mZ[ind] = Integer.parseInt(poss);
+          ind++;
+        }
+      }
     }
+
+    if (cli.has(ARG_WINDOW_EXT)) {
+      String[] lst = cli.get(ARG_WINDOW_EXT).split(",");
+      int cntValid = 0;
+      for (String poss : lst) {
+        if (ext.isValidDouble(poss)) {
+          cntValid++;
+        }
+      }
+      wT = new float[cntValid];
+      int ind = 0;
+      for (String poss : lst) {
+        if (ext.isValidDouble(poss)) {
+          wT[ind] = Float.parseFloat(poss);
+          ind++;
+        }
+      }
+    }
+
+    mT = cli.getD(ARG_MISS_THRESH);
+    runMetaHW = Boolean.parseBoolean(cli.get(ARG_RUN_META_HW));
+    rLibsDir = cli.has(ARG_R_LIBS_DIR) ? cli.get(ARG_R_LIBS_DIR) : null;
+    cmac = cli.getI(ARG_CMAC_THRESHOLD);
+    plotOddsRatio = cli.has(FLAG_PLOT_ODDS_RATIO);
+    overwrite = cli.has(FLAG_OVERWRITE);
+    logFile = cli.has(ARG_LOG_LOCATION) ? cli.get(ARG_LOG_LOCATION) : null;
 
     Logger log = new Logger(logFile, true);
-
-    if (process) {
-      preprocessDataFiles(processList, pop, build, toBuild, log);
-      return;
-    }
 
     File dir = new File(workDir);
     if (!dir.isDirectory()) {
       System.err.println("Error - argument 'workDir' must be a valid directory");
       System.exit(1);
     }
-    GenScorePipeline gsp = new GenScorePipeline(workDir, iT, mZ, wT, mT, cmac, runMetaHW,
-                                                  rLibsDir, plotOddsRatio, build, overwrite, log);
+    GenScorePipeline gsp = new GenScorePipeline(workDir, iT, mZ, wT, mT, cmac, runMetaHW, rLibsDir,
+                                                plotOddsRatio, build, overwrite, log);
     gsp.runPipeline();
   }
 

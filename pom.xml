@@ -104,7 +104,7 @@
                     </descriptorRefs>
                     <archive>
                         <manifest>
-                            <mainClass>org.pankratzlab.utils.GeneScorePipeline</mainClass>
+                            <mainClass>org.pankratzlab.utils.GenScorePipeline</mainClass>
                         </manifest>
                     </archive>
                 </configuration>
