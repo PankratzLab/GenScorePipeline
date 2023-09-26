@@ -2229,6 +2229,16 @@ public class GenScorePipeline {
           public boolean filter(DataLine values) {
             String mkr = values.get(markerCol, null);
             String[] dataAlleles = mkrAlleles.get(mkr);
+            if (dataAlleles == null) {
+              if (mf.metaMarkerAliasLookup.containsKey(mkr)) {
+                mkr = mf.metaMarkerAliasLookup.get(mkr)[0];
+                dataAlleles = mkrAlleles.get(mkr);
+              }
+              if (dataAlleles == null) {
+                log.reportError("Could not retrieve alleles for marker \"" + mkr + "\"");
+                return false;
+              }
+            }
             String[] metaAlleles = new String[] {values.get(a1Column, "NA"),
                                                  values.get(a2Column, "NA")};
             CONFIG config = StrandOps.determineStrandConfig(dataAlleles, metaAlleles);
@@ -4230,14 +4240,12 @@ public class GenScorePipeline {
 
     String header = "\nGeneScorePipeline is a convention-driven submodule.  It relies on a standard folder structure and file naming scheme:\n"
                     + "The directory and file structure must conform to the following:\n"
-                    + "- >Root Directory ['workDir' argument]\n"
-                    + "-  >SNP Effect files:\n"
+                    + "- >Root Directory ['workDir' argument]\n" + "-  >SNP Effect files:\n"
                     + "-    -Effect files must end with '.meta'.\n"
                     + "-    -Effect files may be hand-constructed, or may be generated with the 'preprocess' command from a .xln file\n"
                     + "-    -Effect files contain, at minimum, SNP, Freq, P-value, and Beta/Effect, and, if created with the preprocessor, will include any additional information present in the .xln file\n"
                     + "-    -HitWindows analysis will be run on SNP Effect files, with results being used in regression analysis; the additional arguments to GeneScorePipeline affect only the HitWindows processing.\n"
-                    + "-  >Covariate files:\n"
-                    + "-    -Covariate files must end with '.covar'.\n"
+                    + "-  >Covariate files:\n" + "-    -Covariate files must end with '.covar'.\n"
                     + "-    -Covariate data will be added to ALL analyses.\n"
                     + "-    -Covariate files contain, at minimum, two ID columns (FID and IID), and any number of data columns.\n"
                     + "-  >Data Source Directory 1\n"
@@ -4248,14 +4256,12 @@ public class GenScorePipeline {
                     + "-    dataLabel3    dir1    dataFileExt1    mapFileExt1    idFile3\n"
                     + "-    dataLabel4    dir2    dataFileExt2    mapFileExt2    idFile4\n"
                     + "-  >For data files that contain map or ID info, 'FullPathMapFile' / 'FullPathIdFile' / 'mapFileExt1' / 'idFile' can be replaced with a period ('.').\n"
-                    + "-    >Phenotype files\n"
-                    + "-    -Phenotype files must end with '.pheno'.\n"
+                    + "-    >Phenotype files\n" + "-    -Phenotype files must end with '.pheno'.\n"
                     + "-    -All '.pheno' files will be included as a separate regression analysis\n"
                     + "-    -Phenotype files contain, at minimum, two ID columns (FID and IID), a dependent variable column, and any number of covariate columns.\n"
                     + "-    [Note: if data is in PLINK format and contains valid phenotype status information, an AFFECTED.PHENO file will be created]\n"
                     + "-  >Data Source Directory 2\n" + ">data.txt file\n" + ">Pheno3.pheno file\n"
-                    + "-    >..."
-                    + "\n";
+                    + "-    >..." + "\n";
 
     CLI cli = new CLI(GenScorePipeline.class);
     cli.addHeader(header);
