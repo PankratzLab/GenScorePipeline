@@ -58,6 +58,7 @@ import org.pankratzlab.common.stats.ProbDist;
 import org.pankratzlab.common.stats.RegressionModel;
 import org.pankratzlab.fileparser.AbstractColumnFilter;
 import org.pankratzlab.fileparser.AbstractFileColumn;
+import org.pankratzlab.fileparser.AbstractFileParserFactory;
 import org.pankratzlab.fileparser.AliasedFileColumn;
 import org.pankratzlab.fileparser.ColumnFilter;
 import org.pankratzlab.fileparser.ColumnFilters;
@@ -261,6 +262,7 @@ public class GenScorePipeline {
 
   private final int hitsMkrIndex = 1;
   private final boolean runMetaHW;
+  private final boolean runCrossFilteredHW;
 
   private final Logger log;
   private final GenomeBuild build;
@@ -1304,14 +1306,15 @@ public class GenScorePipeline {
   }
 
   public GenScorePipeline(String workDir, float[] indexThresholds, int[] windowMins,
-                          float[] windowExtThresholds, double missThresh, int cmacThresh,
-                          boolean runMetaHW, String rLibsDir, boolean plotOddsRatio,
+                          float[] windowExtThresholds, boolean runCrossHW, double missThresh,
+                          int cmacThresh, boolean runMetaHW, String rLibsDir, boolean plotOddsRatio,
                           GenomeBuild build, boolean overwrite, Logger log) {
     this.log = log;
     this.overwrite = overwrite;
     this.build = build;
     this.metaDir = ext.verifyDirFormat(workDir);
     this.runMetaHW = runMetaHW;
+    this.runCrossFilteredHW = runCrossHW;
     this.rLibsDir = rLibsDir;
     this.plotOddsRatio = plotOddsRatio;
     this.minMissThresh = missThresh;
@@ -2316,6 +2319,10 @@ public class GenScorePipeline {
   }
 
   private void runHitWindows(Study study) {
+    if (!runCrossFilteredHW) {
+      log.report("Flag set to skip Hit Windows analysis; number of hit windows snps will be set to number of overall snps.");
+    }
+
     for (MetaFile mf : metaFiles) {
 
       for (Constraint constr : analysisConstraints) {
@@ -2323,6 +2330,14 @@ public class GenScorePipeline {
         File prefDir = new File(getDirPath(study, mf, constr));
         String crossFilterFile = prefDir + "/" + CROSS_FILTERED_DATAFILE;
         String hitsFile = prefDir + FILE_PREFIX_HITS + analysisKey + FILE_EXT_OUT;
+
+        if (!runCrossFilteredHW) {
+          if (Files.exists(crossFilterFile, true)) {
+            study.hitWindowCnts.put(constr, mf, Files.countLines(crossFilterFile, 1));
+          }
+          continue;
+        }
+
         final boolean exists = (new File(hitsFile)).exists();
         if (exists && overwrite) {
           log.report("Hit window analysis file already exists, but overwrite flag was set; recreating ... ");
@@ -2370,30 +2385,38 @@ public class GenScorePipeline {
         File prefDir = new File(getDirPath(study, mf, constr));
 
         String crossFilterFile = prefDir + "/" + CROSS_FILTERED_DATAFILE;
-        String hitsFile = prefDir + FILE_PREFIX_HITS + constr.analysisString + FILE_EXT_OUT;
-        String[] hitMarkers = HashVec.loadFileToStringArray(hitsFile, true,
-                                                            new int[] {hitsMkrIndex}, false);
-        HashSet<String> hitMrkSet = new HashSet<>();
-        for (String mkr : hitMarkers) {
-          hitMrkSet.add(mkr);
-        }
 
         final FileColumn<String> markerCol = StandardFileColumns.snp(MARKER_COL_NAME);
         final FileColumn<?> effectAlleleCol = StandardFileColumns.a1(EFFECT_ALLELE_COL_NAME);
         final FileColumn<?> nonEffectAlleleCol = StandardFileColumns.a2(NON_EFFECT_ALLELE_COL_NAME);
         final FileColumn<?> betaCol = StandardFileColumns.beta(BETA_COL_NAME);
-        ColumnFilter hitMarkerFilter = new AbstractColumnFilter(markerCol) {
 
-          @Override
-          public boolean filter(DataLine values) {
-            return hitMrkSet.contains(values.get(markerCol, null));
+        ColumnFilter hitMarkerFilter = null;
+        if (runCrossFilteredHW) {
+          String hitsFile = prefDir + FILE_PREFIX_HITS + constr.analysisString + FILE_EXT_OUT;
+          String[] hitMarkers = HashVec.loadFileToStringArray(hitsFile, true,
+                                                              new int[] {hitsMkrIndex}, false);
+          HashSet<String> hitMrkSet = new HashSet<>();
+          for (String mkr : hitMarkers) {
+            hitMrkSet.add(mkr);
           }
-        };
-        try (FileParser crossFilterParser = FileParserFactory.setup(crossFilterFile, markerCol)
-                                                             .optionalColumns(effectAlleleCol,
-                                                                              nonEffectAlleleCol,
-                                                                              betaCol)
-                                                             .filter(hitMarkerFilter).build()) {
+          hitMarkerFilter = new AbstractColumnFilter(markerCol) {
+
+            @Override
+            public boolean filter(DataLine values) {
+              return hitMrkSet.contains(values.get(markerCol, null));
+            }
+          };
+        }
+        AbstractFileParserFactory crossFilterParserFactory = FileParserFactory.setup(crossFilterFile,
+                                                                                     markerCol)
+                                                                              .optionalColumns(effectAlleleCol,
+                                                                                               nonEffectAlleleCol,
+                                                                                               betaCol);
+        if (hitMarkerFilter != null) {
+          crossFilterParserFactory = crossFilterParserFactory.filter(hitMarkerFilter);
+        }
+        try (FileParser crossFilterParser = crossFilterParserFactory.build()) {
           String subsetFile = prefDir + "/subsetData_" + constr.analysisString + ".xln";
           Map<String, HitMarker> dataList = crossFilterParser.parseToFileAndLoad(subsetFile, "\t",
                                                                                  true, markerCol)
@@ -4218,6 +4241,7 @@ public class GenScorePipeline {
     final String ARG_R_LIBS_DIR = "rLibsDir";
     final String ARG_CMAC_THRESHOLD = "cmac";
     final String ARG_RUN_META_HW = "runMetaHW";
+    final String ARG_RUN_CROSS_HW = "runCrossHW";
     final String ARG_GENOME_BUILD = "build";
     final String ARG_LOG_LOCATION = "log";
     final String FLAG_PLOT_ODDS_RATIO = "plotOddsRatio";
@@ -4232,6 +4256,7 @@ public class GenScorePipeline {
     double mT = DEFAULT_MIN_MISS_THRESH;
     int cmac = 5;
     boolean runMetaHW = true;
+    boolean runCrossHW = true;
 
     GenomeBuild build = GenomeBuild.HG19;
     String rLibsDir = null;
@@ -4359,6 +4384,7 @@ public class GenScorePipeline {
 
     mT = cli.getD(ARG_MISS_THRESH);
     runMetaHW = Boolean.parseBoolean(cli.get(ARG_RUN_META_HW));
+    runCrossHW = Boolean.parseBoolean(cli.get(ARG_RUN_CROSS_HW));
     rLibsDir = cli.has(ARG_R_LIBS_DIR) ? cli.get(ARG_R_LIBS_DIR) : null;
     cmac = cli.getI(ARG_CMAC_THRESHOLD);
     plotOddsRatio = cli.has(FLAG_PLOT_ODDS_RATIO);
@@ -4372,8 +4398,9 @@ public class GenScorePipeline {
       System.err.println("Error - argument 'workDir' must be a valid directory");
       System.exit(1);
     }
-    GenScorePipeline gsp = new GenScorePipeline(workDir, iT, mZ, wT, mT, cmac, runMetaHW, rLibsDir,
-                                                plotOddsRatio, build, overwrite, log);
+    GenScorePipeline gsp = new GenScorePipeline(workDir, iT, mZ, wT, runCrossHW, mT, cmac,
+                                                runMetaHW, rLibsDir, plotOddsRatio, build,
+                                                overwrite, log);
     gsp.runPipeline();
   }
 
