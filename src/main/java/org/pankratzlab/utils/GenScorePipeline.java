@@ -1574,6 +1574,7 @@ public class GenScorePipeline {
         String[] temp = line.split(PSF.Regex.GREEDY_WHITESPACE, -1);
         int[] indices = ext.indexFactors(factors, temp, false, false, true, true, new Logger());
         int index = 1;
+        Set<String> metaMkrs = new HashSet<>();
         while ((line = reader.readLine()) != null) {
           index++;
           if (line.isEmpty()) continue;
@@ -1587,6 +1588,11 @@ public class GenScorePipeline {
             continue;
           }
           String mkr = temp[indices[0]];
+          if (metaMkrs.contains(mkr)) {
+            throw new IllegalStateException("Meta file (" + mf.metaRoot
+                                            + " contains a duplicate SNP: " + mkr);
+          }
+          metaMkrs.add(mkr);
           double beta = indices[1] == -1 ? Double.NaN : Double.parseDouble(temp[indices[1]]);
           double freq = Double.parseDouble(temp[indices[2]]);
           double pval = Double.parseDouble(temp[indices[3]]);
@@ -2499,8 +2505,14 @@ public class GenScorePipeline {
         Map<String, AlleleOrder> matchedMarkerAlleleOrders = new HashMap<>();
 
         int index = 0;
+        Set<String> mkrs = new HashSet<>();
         for (int m = 0; m < markers.length; m++) {
           String mkr = markers[m];
+          if (mkrs.contains(mkr)) {
+            throw new IllegalStateException("Meta file (" + mf.metaRoot
+                                            + " contains a duplicate SNP: " + mkr);
+          }
+          mkrs.add(mkr);
           String[] dataAlleles = alleles[m];
           Alleles dataAlleleObj = new Alleles(dataAlleles[0], dataAlleles[1]);
           markerDosageIndices.put(mkr, dataAlleleObj, m);
@@ -2615,7 +2627,8 @@ public class GenScorePipeline {
             }
             scoreSum += mkrScr;
 
-            markerScores[i][mkrMatchedIndex] = mkrScr;
+            double[] scrs = markerScores[i];
+            scrs[mkrMatchedIndex] = mkrScr;
             markerDosages[i][mkrMatchedIndex] = mkrDose;
 
           }
@@ -4319,6 +4332,7 @@ public class GenScorePipeline {
     cli.addArgWithDefault(ARG_RUN_META_HW,
                           "Enable/Disable HitWindows on input '.meta' files (only applicable if #snps > 1000)",
                           "true");
+    cli.addArgWithDefault(ARG_RUN_CROSS_HW, "Enable/Disable HitWindows on found SNPs", "true");
     cli.addArg(ARG_GENOME_BUILD,
                "Genome Build (one of " + ArrayUtils.toStr(GenomeBuild.values(), ", ") + ")");
     cli.addArg(ARG_LOG_LOCATION, "Location of log file to append to", false);
